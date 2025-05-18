@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <ctime>
 #include <uuid/uuid.h>
+#include <iostream>
 
 namespace notary {
 
@@ -506,11 +507,13 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<PublicKey>>& rootK
         auto keyResult = remoteStore_.GetKey(gun_.empty() ? "default" : gun_, 
                                           role == RoleName::TimestampRole ? "timestamp" : "snapshot");
         if (!keyResult.ok()) {
+            std::cerr << "Failed to get remote key : " << keyResult.error().what() << std::endl;
             continue; // 跳过失败的密钥获取
         }
         
         // 从json中提取公钥信息并创建公钥对象
         auto keyJson = keyResult.value();
+        std::cout << "远端获取到的keyJson: " << keyJson << std::endl;
         std::string keyType = keyJson["keytype"];
         
         // 获取Base64编码的公钥
@@ -530,6 +533,7 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<PublicKey>>& rootK
             keyBytes.clear();
         }
         BIO_free_all(b64);
+        std::cout << "远端获取到的publicKeyB64: " << publicKeyB64 << std::endl;
         
         // 创建公钥对象
         auto publicKey = CreatePublicKey(keyBytes, keyType);

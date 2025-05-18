@@ -9,12 +9,24 @@ file(GLOB_RECURSE SOURCES
 )
 
 # 创建库
-add_library(notary_lib STATIC ${SOURCES})
+add_library(notary_lib 
+    crypto/crypto_service.cpp
+    crypto/keys.cpp
+    main.cpp
+    repository.cpp
+    storage/metadata_store.cpp
+    server/server.cpp
+    server/handlers/default.cpp
+    server/errors/errors.cpp
+    server_main.cpp
+)
 
 # 设置包含目录
 target_include_directories(notary_lib
     PUBLIC
     ${PROJECT_SOURCE_DIR}/include
+    ${httplib_SOURCE_DIR}
+    ${OPENSSL_INCLUDE_DIR}
     ${UUID_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
 )

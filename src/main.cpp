@@ -17,7 +17,7 @@ Error loadConfig(const std::string& configFile, std::string& trustDir, std::stri
     }
     
     if (serverURL.empty()) {
-        serverURL = "https://localhost:4443";
+        serverURL = "http://localhost:4443";
     }
     
     // 确保信任目录存在
