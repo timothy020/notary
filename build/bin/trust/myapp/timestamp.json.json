@@ -1,0 +1,17 @@
+{
+  "signatures": [],
+  "signed": {
+    "_type": "Timestamp",
+    "expires": "2025-06-01T10:39:06+0800",
+    "meta": {
+      "snapshot.json": {
+        "hashes": {
+          "sha256": "Xg9QxjG1U/kO0l9tvZLSZlR0T1By+nYzuMLFvJh1JGY=",
+          "sha512": "pLQ4mhaLV67MKBgbAxVcC026LP/mEV4A8PP84rH4+Ggw44CySBGoNGiEvCXDFckX0nVwpizHWtq0B2ZonzsnBg=="
+        },
+        "length": 695
+      }
+    },
+    "version": 1
+  }
+}

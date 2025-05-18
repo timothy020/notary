@@ -1,0 +1,19 @@
+{
+  "signatures": [
+    {
+      "keyid": "51ba54c13c25d22391d7544770bc3ded48c551cdcdc4a7e98252d71783ceb822",
+      "method": "ecdsa",
+      "sig": "MEQCIGH2a48+m4XMSHew474+wQWwLZZx4me0ntxNsmKmj6RGAiBYayDwVVB9whuzfmkS3EbF2sJUYbr6t7mrEQvbFtpBtw=="
+    }
+  ],
+  "signed": {
+    "_type": "Targets",
+    "delegations": {
+      "keys": {},
+      "roles": []
+    },
+    "expires": "2028-05-17T10:39:06+0800",
+    "targets": {},
+    "version": 1
+  }
+}

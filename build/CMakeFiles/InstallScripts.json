@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/iven/Dev/notary_test/notary/cproject/build/cmake_install.cmake",
+		"/Users/iven/Dev/notary_test/notary/cproject/build/src/cmake_install.cmake",
+		"/Users/iven/Dev/notary_test/notary/cproject/build/test/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

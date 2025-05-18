@@ -1,0 +1,12 @@
+/Users/iven/Dev/notary_test/notary/cproject/build/CMakeFiles/notary.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/CMakeFiles/test.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/CMakeFiles/edit_cache.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/CMakeFiles/rebuild_cache.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/src/CMakeFiles/notary_lib.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/src/CMakeFiles/test.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/src/CMakeFiles/edit_cache.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/src/CMakeFiles/rebuild_cache.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/test/CMakeFiles/notary_tests.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/test/CMakeFiles/test.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/test/CMakeFiles/edit_cache.dir
+/Users/iven/Dev/notary_test/notary/cproject/build/test/CMakeFiles/rebuild_cache.dir

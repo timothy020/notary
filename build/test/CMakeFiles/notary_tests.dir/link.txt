@@ -1,0 +1,1 @@
+/usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/notary_tests.dir/repository_test.cpp.o -o notary_tests  ../src/libnotary_lib.a /opt/homebrew/lib/libCatch2Main.a /opt/homebrew/Cellar/openssl@3/3.4.1/lib/libssl.dylib /opt/homebrew/Cellar/openssl@3/3.4.1/lib/libcrypto.dylib /opt/homebrew/lib/libCatch2.a
