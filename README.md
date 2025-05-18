@@ -8,7 +8,8 @@
 - OpenSSL 3.0+ (用于密码学操作)
 - CLI11 (命令行解析)
 - nlohmann/json (JSON处理)
-- Catch2 (测试框架)
+- Catch2 (测试框架, 需要版本3.x)
+- UUID库 (用于生成唯一标识符)
 
 ## 快速开始
 
@@ -26,18 +27,127 @@ make
 
 ### 使用方法
 
-当前已实现了基础的初始化功能：
+目前已实现核心功能：
 
 ```bash
-# 基本初始化 (创建一个新的信任集合)
-./build/bin/notary init <GUN>
+# 初始化信任集合
+./bin/notary init <GUN>
+
+# 添加目标文件
+./bin/notary add <GUN> <TARGET_NAME> <TARGET_PATH> [--custom <CUSTOM_DATA_FILE>]
+
+# 发布更改
+./bin/notary publish <GUN>
 
 # 使用调试模式查看详细信息
-./build/bin/notary --debug init <GUN>
+./bin/notary --debug <COMMAND>
 
-# 初始化并自动发布(功能待实现)
-./build/bin/notary init <GUN> -p
+# 初始化并自动发布
+./bin/notary init <GUN> -p
 ```
+
+## Ubuntu 22.04部署指南
+
+### 1. 安装基础依赖项
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake libssl-dev uuid-dev
+```
+
+### 2. 安装JSON库
+
+```bash
+sudo apt install -y nlohmann-json3-dev
+```
+
+### 3. 安装CLI11库
+
+```bash
+# 方法1: 使用apt安装(如果可用)
+sudo apt install -y libcli11-dev
+
+# 方法2: 从源码安装
+git clone https://github.com/CLIUtils/CLI11.git
+cd CLI11
+mkdir build && cd build
+cmake ..
+sudo make install
+cd ../..
+```
+
+### 4. 安装Catch2 v3
+
+```bash
+# 首先移除系统上已安装的Catch2 v2(如果存在)
+sudo apt remove catch2 libcatch2-dev
+
+# 从源码安装Catch2 v3
+git clone https://github.com/catchorg/Catch2.git
+cd Catch2
+git checkout v3.4.0  # 使用最新的v3.x稳定版本
+mkdir build && cd build
+cmake -DBUILD_TESTING=OFF ..
+sudo make install
+sudo ldconfig  # 更新共享库缓存
+cd ../..
+```
+
+### 5. 克隆和构建项目
+
+```bash
+# 克隆项目(如果您还没有代码)
+# git clone <repository-url>
+# cd <repository-directory>
+
+# 构建项目
+cd cproject
+mkdir -p build
+cd build
+cmake ..
+make -j$(nproc)
+cd ..
+```
+
+### 6. 运行程序
+
+```bash
+# 基本用法
+./bin/notary init myproject
+
+# 添加目标文件
+./bin/notary add myproject mytarget /path/to/file
+
+# 发布更改
+./bin/notary publish myproject
+```
+
+### 7. 常见问题解决
+
+1. **CMake找不到Catch2**: 
+
+   确保已安装Catch2 v3并指定Catch2目录:
+   ```bash
+   cmake .. -DCatch2_DIR=/usr/local/lib/cmake/Catch2
+   ```
+
+2. **编译时缺少头文件**:
+
+   确保所有依赖都已安装:
+   ```bash
+   sudo apt install -y libssl-dev uuid-dev nlohmann-json3-dev
+   ```
+
+3. **OpenSSL版本兼容性警告**:
+
+   这是正常的，项目使用了一些已废弃API，暂时不影响功能。
+
+4. **权限问题**:
+
+   如果脚本无法执行:
+   ```bash
+   chmod +x build.sh
+   ```
 
 ## 功能说明
 
@@ -56,7 +166,27 @@ make
   - timestamp.json - 指向最新snapshot的元数据
 - 支持配置服务器管理的角色（默认只有Timestamp由服务器管理）
 
-#### 2. 密钥管理系统 (Key Management)
+#### 2. 目标管理 (Target Management)
+
+✅ 实现了`notary add`命令，用于添加目标文件到信任集合：
+
+- 支持添加任意文件作为可信目标
+- 自动计算文件的哈希值（SHA-256和SHA-512）
+- 支持添加自定义元数据
+- 使用changelist机制跟踪待应用的更改
+- 支持指定目标角色和委托角色
+
+#### 3. 发布管理 (Publish Management)
+
+✅ 实现了`notary publish`命令，用于将待处理的更改应用到元数据并发布：
+
+- 将changelist中的更改应用到targets元数据
+- 更新元数据版本号和过期时间
+- 自动处理元数据签名
+- 清理已应用的changelist
+- 支持本地发布
+
+#### 4. 密钥管理系统 (Key Management)
 
 ✅ 完整实现了密钥生成、存储和管理系统：
 
@@ -73,7 +203,17 @@ make
 - `ECDSAPublicKey`/`ECDSAPrivateKey` - ECDSA密钥实现
 - `KeyStore` - 密钥存储和管理
 
-#### 3. 存储系统 (Storage System)
+#### 5. Changelist机制 (Changelist Mechanism)
+
+✅ 实现了类似Go版本的changelist功能：
+
+- 跟踪对元数据的待处理更改
+- 将更改保存为JSON格式的.change文件
+- 支持添加、删除、更新操作
+- 提供按时间戳排序的变更列表
+- 在发布时应用所有待处理的更改
+
+#### 6. 存储系统 (Storage System)
 
 ✅ 完成了本地元数据存储功能：
 
@@ -82,13 +222,13 @@ make
 - 支持读取、写入、更新操作
 - 基于角色的文件命名策略
 
-#### 4. 命令行界面 (CLI)
+#### 7. 命令行界面 (CLI)
 
-✅ 实现了基础的命令行接口：
+✅ 实现了完整的命令行接口：
 
 - 使用CLI11库处理命令行参数
 - 支持全局选项（--debug, --trust-dir, --server等）
-- 实现init子命令及其参数处理
+- 实现init, add, publish子命令及其参数处理
 - 详细的错误报告和成功消息
 
 ### 实现细节
@@ -103,6 +243,21 @@ make
 6. 创建并签名TUF元数据
 7. 将元数据保存到信任目录
 
+添加目标的流程：
+1. 解析命令行参数（目标名称、路径等）
+2. 读取目标文件并计算哈希
+3. 创建Target对象和元数据
+4. 生成changelist记录
+5. 保存更改到.change文件
+
+发布流程：
+1. 获取当前targets元数据
+2. 读取并解析changelist
+3. 应用changelist更改到targets元数据
+4. 更新元数据版本和过期时间
+5. 签名并保存更新后的元数据
+6. 清除已应用的changelist
+
 密钥加密流程：
 1. 生成随机盐和IV
 2. 使用PBKDF2从密码派生密钥
@@ -113,15 +268,15 @@ make
 
 ### 近期开发目标
 
-1. **实现notary add命令**
-   - 支持添加目标文件到Targets
-   - 实现文件哈希计算
-   - 更新相关元数据
+1. **远程服务器支持**
+   - 实现与远程Notary服务器的通信
+   - 支持远程发布元数据
+   - 支持元数据同步和拉取
 
-2. **实现notary publish命令**
-   - 实现元数据签名
-   - 支持将更新后的元数据发布到远程服务器
-   - 实现版本管理和冲突检测
+2. **委托角色支持**
+   - 实现委托路径查找
+   - 支持嵌套委托
+   - 实现阈值签名验证
 
 3. **完善密钥管理**
    - 实现ED25519和RSA密钥支持
@@ -130,20 +285,20 @@ make
 
 ### 中期开发目标
 
-1. **远程服务器集成**
-   - 实现与远程Notary服务器的通信
-   - 支持元数据同步
-   - 实现身份验证和授权
-
-2. **安全性增强**
+1. **安全增强**
    - 实现更安全的密码管理
    - 支持硬件密钥存储
    - 增加完整性验证
 
-3. **更多高级功能**
-   - 委托角色（Delegated Roles）
+2. **更多高级功能**
    - 密钥轮换
    - 过期管理
+   - 自动更新和一致性检查
+
+3. **工具与互操作性**
+   - 与Docker/OCI兼容性
+   - 添加验证工具
+   - 与其他TUF实现的互操作性
 
 ## 项目结构
 
