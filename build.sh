@@ -7,7 +7,9 @@ mkdir -p build
 cd build
 
 # 配置项目
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Debug ..
 
 # 编译
 make -j$(nproc)
+
+cd ..

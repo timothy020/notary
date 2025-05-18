@@ -39,11 +39,17 @@ private:
 
 class RemoteStore {
 public:
-    RemoteStore(const std::string& serverURL);
+    RemoteStore(const std::string& serverURL, 
+               const std::string& metaExtension = "json",
+               const std::string& keyExtension = "key");
     
     // 从远程获取元数据
     Result<json> GetRemote(const std::string& gun,
                          const std::string& role);
+    
+    // 从远程获取密钥
+    Result<json> GetKey(const std::string& gun,
+                      const std::string& role);
     
     // 发布元数据到远程
     Error SetRemote(const std::string& gun,
@@ -52,6 +58,8 @@ public:
     
 private:
     std::string serverURL_;
+    std::string metaExtension_;
+    std::string keyExtension_;
 };
 
 } // namespace storage

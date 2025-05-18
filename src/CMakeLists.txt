@@ -16,6 +16,7 @@ target_include_directories(notary_lib
     PUBLIC
     ${PROJECT_SOURCE_DIR}/include
     ${UUID_INCLUDE_DIRS}
+    ${CURL_INCLUDE_DIRS}
 )
 
 # 链接依赖库
@@ -26,4 +27,5 @@ target_link_libraries(notary_lib
     CLI11::CLI11
     nlohmann_json::nlohmann_json
     ${UUID_LIBRARIES}
+    ${CURL_LIBRARIES}
 ) 

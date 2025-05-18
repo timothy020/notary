@@ -16,6 +16,9 @@ find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(UUID REQUIRED uuid)
 
+# 添加libcurl依赖
+find_package(CURL REQUIRED)
+
 # 添加CLI11和nlohmann-json依赖
 find_package(CLI11 CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
@@ -36,6 +39,7 @@ target_include_directories(notary
     PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${UUID_INCLUDE_DIRS}
+    ${CURL_INCLUDE_DIRS}
 )
 
 target_link_libraries(notary
@@ -46,4 +50,5 @@ target_link_libraries(notary
     CLI11::CLI11
     nlohmann_json::nlohmann_json
     ${UUID_LIBRARIES}
+    ${CURL_LIBRARIES}
 ) 

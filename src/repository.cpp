@@ -387,7 +387,7 @@ Error FileChangelist::Close() {
 Repository::Repository(const std::string& trustDir, const std::string& serverURL)
     : baseURL_(serverURL)
     , cache_(trustDir)
-    , remoteStore_(serverURL) {
+    , remoteStore_(serverURL, "json", "key") {
     
     // 创建changelist目录路径
     std::string changelistDir = trustDir + "/changelist";
@@ -503,16 +503,33 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<PublicKey>>& rootK
 
     // 获取远程角色密钥
     for (const auto& role : remoteRoles) {
-        auto keyResult = remoteStore_.GetRemote(gun_.empty() ? "default" : gun_, 
-                                              role == RoleName::TimestampRole ? "timestamp" : "snapshot");
+        auto keyResult = remoteStore_.GetKey(gun_.empty() ? "default" : gun_, 
+                                          role == RoleName::TimestampRole ? "timestamp" : "snapshot");
         if (!keyResult.ok()) {
             continue; // 跳过失败的密钥获取
         }
         
         // 从json中提取公钥信息并创建公钥对象
-        auto key = keyResult.value()["public_key"];
-        std::vector<uint8_t> keyBytes = key["public"];
-        std::string keyType = key["type"];
+        auto keyJson = keyResult.value();
+        std::string keyType = keyJson["keytype"];
+        
+        // 获取Base64编码的公钥
+        std::string publicKeyB64 = keyJson["keyval"]["public"];
+        
+        // 解码Base64公钥数据到vector<uint8_t>
+        BIO* b64 = BIO_new(BIO_f_base64());
+        BIO* bio = BIO_new_mem_buf(publicKeyB64.data(), publicKeyB64.length());
+        BIO_push(b64, bio);
+        BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+        
+        std::vector<uint8_t> keyBytes(publicKeyB64.size());
+        int decodedSize = BIO_read(b64, keyBytes.data(), publicKeyB64.size());
+        if (decodedSize > 0) {
+            keyBytes.resize(decodedSize);
+        } else {
+            keyBytes.clear();
+        }
+        BIO_free_all(b64);
         
         // 创建公钥对象
         auto publicKey = CreatePublicKey(keyBytes, keyType);

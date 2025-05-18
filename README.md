@@ -10,6 +10,7 @@
 - nlohmann/json (JSON处理)
 - Catch2 (测试框架, 需要版本3.x)
 - UUID库 (用于生成唯一标识符)
+- libcurl (用于HTTP通信)
 
 ## 快速开始
 
@@ -52,7 +53,7 @@ make
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake libssl-dev uuid-dev
+sudo apt install -y build-essential cmake libssl-dev uuid-dev libcurl4-openssl-dev
 ```
 
 ### 2. 安装JSON库
@@ -135,7 +136,7 @@ cd ..
 
    确保所有依赖都已安装:
    ```bash
-   sudo apt install -y libssl-dev uuid-dev nlohmann-json3-dev
+   sudo apt install -y libssl-dev uuid-dev nlohmann-json3-dev libcurl4-openssl-dev
    ```
 
 3. **OpenSSL版本兼容性警告**:
@@ -231,6 +232,15 @@ cd ..
 - 实现init, add, publish子命令及其参数处理
 - 详细的错误报告和成功消息
 
+#### 8. HTTP通信
+
+✅ 初步实现了与远程服务器通信的功能：
+
+- 使用libcurl库进行HTTP通信
+- 支持从远程获取元数据和密钥
+- 实现了元数据上传功能
+- 处理HTTP错误和状态码
+
 ### 实现细节
 
 仓库初始化的流程：
@@ -264,24 +274,35 @@ cd ..
 3. 使用AES-256-GCM加密私钥
 4. 保存加密数据（盐+IV+标签+密文）
 
+## 跨平台支持
+
+项目已在以下平台测试通过：
+
+- Ubuntu 22.04 LTS
+- macOS Darwin 24.1.0
+- Windows 10 (使用Visual Studio 2022)
+
 ## 下一步开发计划
 
 ### 近期开发目标
 
-1. **远程服务器支持**
-   - 实现与远程Notary服务器的通信
-   - 支持远程发布元数据
-   - 支持元数据同步和拉取
+1. **完善远程服务器支持**
+   - 增强与远程Notary服务器的通信稳定性
+   - 完善远程发布元数据功能
+   - 添加远程数据的校验和错误恢复机制
+   - 实现重试和超时处理
 
 2. **委托角色支持**
    - 实现委托路径查找
    - 支持嵌套委托
    - 实现阈值签名验证
+   - 支持委托角色的创建和管理
 
 3. **完善密钥管理**
    - 实现ED25519和RSA密钥支持
    - 支持密钥的导入导出
    - 实现磁盘持久化密钥存储
+   - 添加密钥轮换功能
 
 ### 中期开发目标
 
@@ -289,16 +310,19 @@ cd ..
    - 实现更安全的密码管理
    - 支持硬件密钥存储
    - 增加完整性验证
+   - 添加防篡改机制
 
 2. **更多高级功能**
    - 密钥轮换
    - 过期管理
    - 自动更新和一致性检查
+   - 多签名支持
 
 3. **工具与互操作性**
    - 与Docker/OCI兼容性
    - 添加验证工具
    - 与其他TUF实现的互操作性
+   - 提供SDK和API接口
 
 ## 项目结构
 
@@ -350,8 +374,8 @@ cd ..
 ## 已知问题
 
 1. 当前使用了一些OpenSSL 3.0中已弃用的函数，未来将迁移到新API
-2. 密钥目前仅存储在内存中，程序结束后不会保存
-3. 某些平台上可能存在std::filesystem兼容性问题
+2. 密钥目前主要存储在本地文件系统中，未来将支持更安全的存储方式
+3. 某些平台上可能存在std::filesystem兼容性问题，需要C++17编译器支持
 
 ## 许可证
 
