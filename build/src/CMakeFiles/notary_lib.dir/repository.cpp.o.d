@@ -903,8 +903,6 @@ src/CMakeFiles/notary_lib.dir/repository.cpp.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/cstdarg \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__memory/temp_value.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__split_buffer \
-  /Users/iven/Dev/notary_test/notary/cproject/include/notary/crypto/crypto_service.hpp \
-  /Users/iven/Dev/notary_test/notary/cproject/include/notary/crypto/keys.hpp \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/map \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/is_transparent.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__iterator/ranges_iterator_traits.h \
@@ -932,6 +930,8 @@ src/CMakeFiles/notary_lib.dir/repository.cpp.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/pointer_to_binary_function.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/pointer_to_unary_function.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/__functional/unary_negate.h \
+  /Users/iven/Dev/notary_test/notary/cproject/include/notary/crypto/crypto_service.hpp \
+  /Users/iven/Dev/notary_test/notary/cproject/include/notary/crypto/keys.hpp \
   /Users/iven/Dev/notary_test/notary/cproject/include/notary/types.hpp \
   /Users/iven/Dev/notary_test/notary/cproject/include/notary/storage/metadata_store.hpp \
   /opt/homebrew/include/nlohmann/json.hpp \
@@ -1116,4 +1116,7 @@ src/CMakeFiles/notary_lib.dir/repository.cpp.o: \
   /opt/homebrew/Cellar/openssl@3/3.4.1/include/openssl/conftypes.h \
   /opt/homebrew/Cellar/openssl@3/3.4.1/include/openssl/pemerr.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/sstream \
-  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/iostream \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1/fstream \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/uuid/uuid.h \
+  /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys/_types/_uuid_t.h

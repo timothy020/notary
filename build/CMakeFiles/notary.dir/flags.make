@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/Users/iven/Dev/notary_test/notary/cproject/include -isystem /opt/homebrew/Cellar/openssl@3/3.4.1/include -isystem /opt/homebrew/include
+CXX_INCLUDES = -I/Users/iven/Dev/notary_test/notary/cproject/include -I/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk/usr/include/uuid -isystem /opt/homebrew/Cellar/openssl@3/3.4.1/include -isystem /opt/homebrew/include
 
 CXX_FLAGSarm64 = -std=gnu++17 -arch arm64
 

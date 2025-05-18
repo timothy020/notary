@@ -1,15 +1,19 @@
 #include <iostream>
+#include <fstream>
 #include <CLI/CLI.hpp>
 #include "notary/repository.hpp"
 #include <filesystem>
 
 using namespace notary;
 
+// 使用标准filesystem命名空间
+namespace fs = std::filesystem;
+
 // 加载配置
 Error loadConfig(const std::string& configFile, std::string& trustDir, std::string& serverURL) {
     // 如果没有指定配置文件，使用默认值
     if (trustDir.empty()) {
-        trustDir = std::filesystem::current_path().string() + "/trust";
+        trustDir = fs::current_path().string() + "/trust";
     }
     
     if (serverURL.empty()) {
@@ -18,8 +22,8 @@ Error loadConfig(const std::string& configFile, std::string& trustDir, std::stri
     
     // 确保信任目录存在
     try {
-        if (!std::filesystem::exists(trustDir)) {
-            std::filesystem::create_directories(trustDir);
+        if (!fs::exists(trustDir)) {
+            fs::create_directories(trustDir);
         }
     } catch (const std::exception& e) {
         return Error(std::string("Failed to create trust directory: ") + e.what());
@@ -59,10 +63,41 @@ Error maybeAutoPublish(bool autoPublish, const std::string& gun,
     }
     
     std::cout << "Publishing changes to " << gun << std::endl;
-    // TODO: 实现自动发布
-    // 这里应该调用repo的发布方法
+    return repo.Publish(); // 调用Repository类的Publish方法
+}
+
+// 加载自定义数据
+Result<std::vector<uint8_t>> getTargetCustom(const std::string& customPath) {
+    if (customPath.empty()) {
+        return std::vector<uint8_t>();
+    }
     
-    return Error();
+    try {
+        // 检查文件是否存在
+        if (!fs::exists(customPath)) {
+            return Error(std::string("Custom data file not found: ") + customPath);
+        }
+        
+        // 读取文件内容
+        std::ifstream file(customPath, std::ios::binary | std::ios::ate);
+        if (!file) {
+            return Error(std::string("Failed to open custom data file: ") + customPath);
+        }
+        
+        // 获取文件大小
+        auto size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        
+        // 读取文件内容
+        std::vector<uint8_t> customData(size);
+        if (!file.read(reinterpret_cast<char*>(customData.data()), size)) {
+            return Error(std::string("Failed to read custom data file: ") + customPath);
+        }
+        
+        return customData;
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to load custom data: ") + e.what());
+    }
 }
 
 int main(int argc, char** argv) {
@@ -156,6 +191,134 @@ int main(int argc, char** argv) {
                 std::cerr << "Error publishing changes: " << pubErr.what() << std::endl;
                 return;
             }
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return;
+        }
+    });
+    
+    // add 命令 - 修改参数处理方式
+    auto add = app.add_subcommand("add", "Adds the file as a target to the trusted collection");
+    std::vector<std::string> roles;
+    std::string customPath;
+    std::string targetName, targetPath; // 新增变量直接接收参数
+    
+    add->add_option("gun", gun, "Globally Unique Name")->required();
+    add->add_option("target_name", targetName, "Target name")->required();
+    add->add_option("target_path", targetPath, "Path to target data")->required();
+    add->add_option("-r,--roles", roles, "Delegation roles to add this target to");
+    add->add_option("--custom", customPath, "Path to the file containing custom data for this target");
+    add->add_flag("-p,--publish", autoPublish, "Auto publish after adding target");
+    add->add_option("--password,--passphrase", password, "Password for key encryption");
+    
+    add->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                std::cerr << "Error loading configuration: " << configErr.what() << std::endl;
+                return;
+            }
+            
+            if (debug) {
+                std::cout << "Using trust directory: " << trustDir << std::endl;
+                std::cout << "Using server URL: " << serverURL << std::endl;
+                std::cout << "Adding target to GUN: " << gun << std::endl;
+            }
+            
+            // 设置默认密码（如果未提供）
+            if (password.empty()) {
+                password = "changeme";  // 默认密码
+                std::cout << "Warning: Using default password. Please change it for production use." << std::endl;
+            }
+            
+            // 2. 创建仓库工厂并获取仓库实例
+            Repository repo(trustDir, serverURL);
+            repo.SetGUN(gun);
+            repo.SetPassphrase(password); // 设置密码
+            
+            // 3. 加载自定义数据（如果有）
+            std::vector<uint8_t> customData;
+            if (!customPath.empty()) {
+                auto customResult = getTargetCustom(customPath);
+                if (!customResult.ok()) {
+                    std::cerr << "Error loading custom data: " << customResult.error().what() << std::endl;
+                    return;
+                }
+                customData = customResult.value();
+            }
+            
+            // 4. 创建目标对象
+            auto targetResult = Repository::NewTarget(targetName, targetPath, customData);
+            if (!targetResult.ok()) {
+                std::cerr << "Error creating target: " << targetResult.error().what() << std::endl;
+                return;
+            }
+            
+            // 5. 添加目标
+            auto addErr = repo.AddTarget(targetResult.value(), roles);
+            if (!addErr.ok()) {
+                std::cerr << "Error adding target: " << addErr.what() << std::endl;
+                return;
+            }
+            
+            std::cout << "Addition of target \"" << targetName << "\" to repository \"" 
+                      << gun << "\" staged for next publish." << std::endl;
+            
+            // 6. 可能自动发布
+            auto pubErr = maybeAutoPublish(autoPublish, gun, serverURL, repo);
+            if (!pubErr.ok()) {
+                std::cerr << "Error publishing changes: " << pubErr.what() << std::endl;
+                return;
+            }
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << std::endl;
+            return;
+        }
+    });
+    
+    // publish 命令
+    auto publish = app.add_subcommand("publish", "Publishes staged changes");
+    
+    publish->add_option("gun", gun, "Globally Unique Name")->required();
+    publish->add_option("--password,--passphrase", password, "Password for key encryption");
+    
+    publish->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                std::cerr << "Error loading configuration: " << configErr.what() << std::endl;
+                return;
+            }
+            
+            if (debug) {
+                std::cout << "Using trust directory: " << trustDir << std::endl;
+                std::cout << "Using server URL: " << serverURL << std::endl;
+                std::cout << "Publishing changes for GUN: " << gun << std::endl;
+            }
+            
+            // 设置默认密码（如果未提供）
+            if (password.empty()) {
+                password = "changeme";  // 默认密码
+                std::cout << "Warning: Using default password. Please change it for production use." << std::endl;
+            }
+            
+            // 2. 创建仓库工厂并获取仓库实例
+            Repository repo(trustDir, serverURL);
+            repo.SetGUN(gun);
+            repo.SetPassphrase(password); // 设置密码
+            
+            // 3. 发布更改
+            auto pubErr = repo.Publish();
+            if (!pubErr.ok()) {
+                std::cerr << "Error publishing changes: " << pubErr.what() << std::endl;
+                return;
+            }
+            
+            std::cout << "Successfully published changes for " << gun << std::endl;
             
         } catch (const std::exception& e) {
             std::cerr << "Error: " << e.what() << std::endl;

@@ -1,9 +1,9 @@
 {
   "signatures": [
     {
-      "keyid": "51ba54c13c25d22391d7544770bc3ded48c551cdcdc4a7e98252d71783ceb822",
+      "keyid": "46e97819bb352027d492832f9cc9dd0771d3120b8794d77f073af65537b83bdd",
       "method": "ecdsa",
-      "sig": "MEQCIGH2a48+m4XMSHew474+wQWwLZZx4me0ntxNsmKmj6RGAiBYayDwVVB9whuzfmkS3EbF2sJUYbr6t7mrEQvbFtpBtw=="
+      "sig": "MEUCIDtL4CMwkcmgwwnZ/dB4+OoaSYs4U8WH/0PgzUNRVLw3AiEAoXs+Ua71FUni0fCnFE+RrLQbixGpAMwRi76A4krHIDE="
     }
   ],
   "signed": {
@@ -12,7 +12,7 @@
       "keys": {},
       "roles": []
     },
-    "expires": "2028-05-17T10:39:06+0800",
+    "expires": "2028-05-17T11:23:54+0800",
     "targets": {},
     "version": 1
   }

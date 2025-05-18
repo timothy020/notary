@@ -11,10 +11,17 @@
 #include <iomanip>
 #include <sstream>
 #include <iostream>
+#include <fstream>
+#include <filesystem>
+#include <ctime>
+#include <uuid/uuid.h>
 
 namespace notary {
 
 using json = nlohmann::json;
+
+// 使用标准filesystem命名空间
+namespace fs = std::filesystem;
 
 namespace {
 // 检查角色是否可以由服务器管理
@@ -184,10 +191,207 @@ std::string base64Encode(const std::vector<uint8_t>& data) {
 
 } // namespace
 
+namespace changelist {
+
+// Base64编码函数
+std::string base64Encode(const std::vector<uint8_t>& data) {
+    BIO* b64 = BIO_new(BIO_f_base64());
+    BIO* mem = BIO_new(BIO_s_mem());
+    BIO_push(b64, mem);
+    BIO_write(b64, data.data(), data.size());
+    BIO_flush(b64);
+    
+    BUF_MEM* bptr;
+    BIO_get_mem_ptr(b64, &bptr);
+    std::string result(bptr->data, bptr->length);
+    
+    // 移除可能存在的换行符
+    result.erase(std::remove(result.begin(), result.end(), '\n'), result.end());
+    
+    BIO_free_all(b64);
+    return result;
+}
+
+// Base64解码函数
+std::vector<uint8_t> base64Decode(const std::string& data) {
+    BIO* b64 = BIO_new(BIO_f_base64());
+    BIO* mem = BIO_new_mem_buf(data.data(), data.size());
+    BIO_push(b64, mem);
+    
+    std::vector<uint8_t> result(data.size());
+    int decodedSize = BIO_read(b64, result.data(), data.size());
+    if (decodedSize > 0) {
+        result.resize(decodedSize);
+    } else {
+        result.clear();
+    }
+    
+    BIO_free_all(b64);
+    return result;
+}
+
+// FileChangelist实现
+FileChangelist::FileChangelist(const std::string& dir) : dir_(dir) {
+    // 确保目录存在
+    try {
+        if (!fs::exists(dir)) {
+            fs::create_directories(dir);
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to create changelist directory: " << e.what() << std::endl;
+    }
+}
+
+std::vector<std::shared_ptr<Change>> FileChangelist::List() const {
+    std::vector<std::shared_ptr<Change>> changes;
+    
+    try {
+        // 获取目录下所有文件
+        if (!fs::exists(dir_)) {
+            return changes; // 目录不存在，返回空列表
+        }
+        
+        std::vector<fs::directory_entry> files;
+        for (const auto& entry : fs::directory_iterator(dir_)) {
+            if (!fs::is_directory(entry.path())) {
+                files.push_back(entry);
+            }
+        }
+        
+        // 按照文件名排序（文件名包含时间戳）
+        std::sort(files.begin(), files.end(), 
+                 [](const fs::directory_entry& a, const fs::directory_entry& b) {
+                     return a.path().filename().string() < b.path().filename().string();
+                 });
+        
+        // 读取并解析每个文件
+        for (const auto& file : files) {
+            std::ifstream fileStream(file.path(), std::ios::binary);
+            if (!fileStream) {
+                std::cerr << "Could not open file: " << file.path().string() << std::endl;
+                continue;
+            }
+            
+            // 读取文件内容
+            json changeData;
+            try {
+                fileStream >> changeData;
+                
+                // 解析为TUFChange对象
+                std::string action = changeData["action"];
+                std::string role = changeData["role"];
+                std::string type = changeData["type"];
+                std::string path = changeData["path"];
+                
+                // 读取data字段 (而不是content)
+                std::vector<uint8_t> content;
+                if (changeData.contains("data") && !changeData["data"].is_null()) {
+                    if (changeData["data"].is_string()) {
+                        std::string dataStr = changeData["data"];
+                        content = base64Decode(dataStr);
+                    }
+                }
+                
+                auto change = std::make_shared<TUFChange>(action, role, type, path, content);
+                changes.push_back(change);
+            } catch (const std::exception& e) {
+                std::cerr << "Error parsing change file " << file.path().string() 
+                          << ": " << e.what() << std::endl;
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error listing changes: " << e.what() << std::endl;
+    }
+    
+    return changes;
+}
+
+Error FileChangelist::Add(const std::shared_ptr<Change>& change) {
+    try {
+        // 创建一个唯一的文件名，格式为：时间戳_UUID.change
+        auto now = std::chrono::system_clock::now();
+        auto nowNano = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now.time_since_epoch()).count();
+        
+        // 生成UUID
+        uuid_t uuid;
+        uuid_generate(uuid);
+        char uuidStr[37]; // 36字符UUID + 结束符
+        uuid_unparse(uuid, uuidStr);
+        
+        // 构建文件名
+        std::stringstream ss;
+        ss << std::setw(20) << std::setfill('0') << nowNano << "_" << uuidStr << ".change";
+        std::string filename = ss.str();
+        
+        // 构建完整路径
+        fs::path filePath = fs::path(dir_) / filename;
+        
+        // 创建JSON对象
+        json changeData;
+        changeData["action"] = change->Action();
+        changeData["role"] = change->Scope();
+        changeData["type"] = change->Type();
+        changeData["path"] = change->Path();
+        
+        // 处理content字段，并以Base64编码存储为data字段
+        const auto& content = change->Content();
+        if (!content.empty()) {
+            changeData["data"] = base64Encode(content);
+        } else {
+            changeData["data"] = nullptr;
+        }
+        
+        // 写入文件
+        std::ofstream fileStream(filePath, std::ios::binary);
+        if (!fileStream) {
+            return Error("Failed to create change file: " + filePath.string());
+        }
+        
+        fileStream << changeData.dump(2); // 使用2空格缩进的格式输出JSON
+        fileStream.close();
+        
+        return Error(); // 成功
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to add change: ") + e.what());
+    }
+}
+
+Error FileChangelist::Clear(const std::string& archive) {
+    try {
+        // 如果目录不存在，直接返回
+        if (!fs::exists(dir_)) {
+            return Error("Changelist directory does not exist: " + dir_);
+        }
+        
+        // 遍历目录中的所有文件并删除
+        for (const auto& entry : fs::directory_iterator(dir_)) {
+            if (!fs::is_directory(entry.path())) {
+                fs::remove(entry.path());
+            }
+        }
+        
+        return Error(); // 成功
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to clear changelist: ") + e.what());
+    }
+}
+
+Error FileChangelist::Close() {
+    // 没有需要关闭的资源
+    return Error();
+}
+
+} // namespace changelist
+
 Repository::Repository(const std::string& trustDir, const std::string& serverURL)
     : baseURL_(serverURL)
     , cache_(trustDir)
     , remoteStore_(serverURL) {
+    
+    // 创建changelist目录路径
+    std::string changelistDir = trustDir + "/changelist";
+    changelist_ = std::make_unique<changelist::FileChangelist>(changelistDir);
 }
 
 void Repository::SetPassphrase(const std::string& passphrase) {
@@ -969,6 +1173,233 @@ Error Repository::initializeTUFMetadata(const BaseRole& root,
         return Error();
     } catch (const std::exception& e) {
         return Error(std::string("Failed to initialize TUF metadata: ") + e.what());
+    }
+}
+
+Result<Target> Repository::NewTarget(const std::string& targetName, 
+                                    const std::string& targetPath,
+                                    const std::vector<uint8_t>& customData) {
+    // 检查目标文件是否存在
+    if (!fs::exists(targetPath)) {
+        return Error(std::string("Target file not found: ") + targetPath);
+    }
+    
+    // 读取文件内容
+    std::ifstream file(targetPath, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return Error(std::string("Failed to open target file: ") + targetPath);
+    }
+    
+    // 获取文件大小
+    auto size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    
+    // 读取文件内容
+    std::vector<uint8_t> fileData(size);
+    if (!file.read(reinterpret_cast<char*>(fileData.data()), size)) {
+        return Error(std::string("Failed to read target file: ") + targetPath);
+    }
+    
+    // 计算哈希值
+    std::map<std::string, std::vector<uint8_t>> hashes;
+    
+    // 计算SHA-256哈希
+    unsigned char hash_sha256[EVP_MAX_MD_SIZE];
+    unsigned int hash_sha256_len;
+    EVP_MD_CTX* mdctx_sha256 = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(mdctx_sha256, EVP_sha256(), nullptr);
+    EVP_DigestUpdate(mdctx_sha256, fileData.data(), fileData.size());
+    EVP_DigestFinal_ex(mdctx_sha256, hash_sha256, &hash_sha256_len);
+    EVP_MD_CTX_free(mdctx_sha256);
+    
+    // 存储SHA-256哈希
+    std::vector<uint8_t> sha256Hash(hash_sha256, hash_sha256 + hash_sha256_len);
+    hashes["sha256"] = sha256Hash;
+    
+    // 计算SHA-512哈希
+    unsigned char hash_sha512[EVP_MAX_MD_SIZE];
+    unsigned int hash_sha512_len;
+    EVP_MD_CTX* mdctx_sha512 = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(mdctx_sha512, EVP_sha512(), nullptr);
+    EVP_DigestUpdate(mdctx_sha512, fileData.data(), fileData.size());
+    EVP_DigestFinal_ex(mdctx_sha512, hash_sha512, &hash_sha512_len);
+    EVP_MD_CTX_free(mdctx_sha512);
+    
+    // 存储SHA-512哈希
+    std::vector<uint8_t> sha512Hash(hash_sha512, hash_sha512 + hash_sha512_len);
+    hashes["sha512"] = sha512Hash;
+    
+    // 创建目标对象
+    Target target;
+    target.name = targetName;
+    target.hashes = std::move(hashes);
+    target.length = size;
+    target.custom = customData;
+    
+    return target;
+}
+
+Error Repository::AddTarget(const Target& target, const std::vector<std::string>& roles) {
+    try {
+        // 验证目标哈希是否存在
+        if (target.hashes.empty()) {
+            return Error("No hashes specified for target \"" + target.name + "\"");
+        }
+        
+        // 构造目标元数据
+        json meta;
+        meta["length"] = target.length;
+        
+        // 添加哈希值
+        meta["hashes"] = json::object();
+        for (const auto& [algorithm, hash] : target.hashes) {
+            meta["hashes"][algorithm] = base64Encode(hash);
+        }
+        
+        // 添加自定义数据（如果有）
+        if (!target.custom.empty()) {
+            meta["custom"] = target.custom;
+        }
+        
+        // 序列化元数据为JSON
+        std::string metaJson = meta.dump();
+        std::vector<uint8_t> content(metaJson.begin(), metaJson.end());
+        
+        // 创建变更
+        std::vector<std::string> effectiveRoles;
+        if (roles.empty()) {
+            // 默认使用targets角色
+            effectiveRoles.push_back("targets");
+        } else {
+            effectiveRoles = roles;
+        }
+        
+        // 为每个角色添加变更
+        for (const auto& role : effectiveRoles) {
+            auto change = std::make_shared<changelist::TUFChange>(
+                changelist::ActionCreate,    // 创建操作
+                role,                        // 目标角色
+                changelist::TypeTargetsTarget, // 目标类型
+                target.name,                 // 目标路径
+                content                      // 元数据内容
+            );
+            
+            auto err = changelist_->Add(change);
+            if (!err.ok()) {
+                return err;
+            }
+        }
+        
+        return Error(); // 成功
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to add target: ") + e.what());
+    }
+}
+
+Error Repository::applyChangelist() {
+    try {
+        auto changes = changelist_->List();
+        if (changes.empty()) {
+            return Error(); // 没有变更需要应用
+        }
+        
+        // 获取当前targets元数据
+        std::string gunStr = gun_.empty() ? "default" : gun_;
+        auto result = cache_.Get(gunStr, "targets.json");
+        if (!result.ok()) {
+            return Error("Could not load targets metadata");
+        }
+        
+        json targetsData = result.value();
+        bool targetsModified = false;
+        
+        // 应用每个变更
+        for (const auto& change : changes) {
+            // 目前只处理targets变更
+            if (change->Type() == changelist::TypeTargetsTarget) {
+                if (change->Action() == changelist::ActionCreate || 
+                    change->Action() == changelist::ActionUpdate) {
+                    // 解析元数据
+                    std::string contentStr(change->Content().begin(), change->Content().end());
+                    json targetMeta;
+                    try {
+                        targetMeta = json::parse(contentStr);
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error parsing target metadata: " << e.what() << std::endl;
+                        continue;
+                    }
+                    
+                    // 添加到targets
+                    if (!targetsData.contains("signed")) {
+                        targetsData["signed"] = json::object();
+                    }
+                    if (!targetsData["signed"].contains("targets")) {
+                        targetsData["signed"]["targets"] = json::object();
+                    }
+                    
+                    targetsData["signed"]["targets"][change->Path()] = targetMeta;
+                    targetsModified = true;
+                } else if (change->Action() == changelist::ActionDelete) {
+                    // 从targets中删除
+                    if (targetsData.contains("signed") && 
+                        targetsData["signed"].contains("targets") &&
+                        targetsData["signed"]["targets"].contains(change->Path())) {
+                        targetsData["signed"]["targets"].erase(change->Path());
+                        targetsModified = true;
+                    }
+                }
+            }
+        }
+        
+        // 如果有修改，更新版本和过期时间，然后保存
+        if (targetsModified) {
+            // 更新元数据的version字段
+            if (targetsData["signed"].contains("version")) {
+                targetsData["signed"]["version"] = targetsData["signed"]["version"].get<int>() + 1;
+            } else {
+                targetsData["signed"]["version"] = 1;
+            }
+            
+            // 更新元数据的expires字段
+            auto expiry = getDefaultExpiry(RoleName::TargetsRole);
+            auto expiryTime = std::chrono::system_clock::to_time_t(expiry);
+            std::stringstream ss;
+            ss << std::put_time(std::gmtime(&expiryTime), "%Y-%m-%dT%H:%M:%SZ");
+            targetsData["signed"]["expires"] = ss.str();
+            
+            // 保存更新后的元数据
+            auto err = cache_.Set(gunStr, "targets.json", targetsData);
+            if (!err.ok()) {
+                return Error(std::string("Failed to save target metadata: ") + err.what());
+            }
+        }
+        
+        return Error(); // 成功
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to apply changelist: ") + e.what());
+    }
+}
+
+Error Repository::Publish() {
+    try {
+        // 应用changelist
+        auto err = applyChangelist();
+        if (!err.ok()) {
+            return err;
+        }
+        
+        // 清除changelist
+        err = changelist_->Clear("");
+        if (!err.ok()) {
+            std::cerr << "Warning: Unable to clear changelist. You may want to manually delete the folder "
+                      << changelist_->Location() << std::endl;
+        }
+        
+        // TODO: 推送到远程服务器
+        
+        return Error(); // 成功
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to publish: ") + e.what());
     }
 }
 
