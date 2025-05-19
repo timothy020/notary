@@ -1,1 +1,0 @@
-/usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/notary.dir/src/main.cpp.o -o bin/notary  src/libnotary_lib.a /opt/homebrew/Cellar/openssl@3/3.4.1/lib/libssl.dylib /opt/homebrew/Cellar/openssl@3/3.4.1/lib/libcrypto.dylib

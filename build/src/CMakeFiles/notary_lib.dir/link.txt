@@ -1,2 +1,0 @@
-/usr/bin/ar qc libnotary_lib.a CMakeFiles/notary_lib.dir/crypto/crypto_service.cpp.o CMakeFiles/notary_lib.dir/crypto/keys.cpp.o CMakeFiles/notary_lib.dir/main.cpp.o CMakeFiles/notary_lib.dir/repository.cpp.o CMakeFiles/notary_lib.dir/storage/metadata_store.cpp.o
-/usr/bin/ranlib libnotary_lib.a
