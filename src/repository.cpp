@@ -486,8 +486,12 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<PublicKey>>& rootK
     BaseRole snapshot(RoleName::SnapshotRole, 0, emptyKeys);
     BaseRole timestamp(RoleName::TimestampRole, 0, emptyKeys);
 
-    // 创建本地角色密钥
+    // 创建本地角色密钥（不包括timestamp）
     for (const auto& role : localRoles) {
+        if (role == RoleName::TimestampRole) {
+            continue; // 跳过timestamp角色，它只从远程获取
+        }
+        
         auto keyResult = cryptoService_.Create(role, gun_, KeyAlgorithm::ECDSA);
         if (!keyResult.ok()) {
             continue; // 跳过失败的密钥创建
@@ -511,40 +515,54 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<PublicKey>>& rootK
             continue; // 跳过失败的密钥获取
         }
         
-        // 从json中提取公钥信息并创建公钥对象
+        // 从json中提取公钥信息
         auto keyJson = keyResult.value();
         std::cout << "远端获取到的keyJson: " << keyJson << std::endl;
-        std::string keyType = keyJson["keytype"];
         
-        // 获取Base64编码的公钥
+        // 获取Base64编码的公钥数据
         std::string publicKeyB64 = keyJson["keyval"]["public"];
         
-        // 解码Base64公钥数据到vector<uint8_t>
+        // 解码Base64公钥数据
         BIO* b64 = BIO_new(BIO_f_base64());
         BIO* bio = BIO_new_mem_buf(publicKeyB64.data(), publicKeyB64.length());
         BIO_push(b64, bio);
         BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
         
-        std::vector<uint8_t> keyBytes(publicKeyB64.size());
-        int decodedSize = BIO_read(b64, keyBytes.data(), publicKeyB64.size());
+        std::vector<uint8_t> derData(publicKeyB64.size());
+        int decodedSize = BIO_read(b64, derData.data(), publicKeyB64.size());
         if (decodedSize > 0) {
-            keyBytes.resize(decodedSize);
+            derData.resize(decodedSize);
         } else {
-            keyBytes.clear();
+            derData.clear();
         }
         BIO_free_all(b64);
-        std::cout << "远端获取到的publicKeyB64: " << publicKeyB64 << std::endl;
         
-        // 创建公钥对象
-        auto publicKey = CreatePublicKey(keyBytes, keyType);
-        if (publicKey) {
-            std::vector<std::shared_ptr<PublicKey>> roleKeys = {publicKey};
-            
-            if (role == RoleName::TimestampRole) {
-                timestamp = BaseRole(role, 1, roleKeys);
-            } else if (role == RoleName::SnapshotRole) {
-                snapshot = BaseRole(role, 1, roleKeys);
+        // 从DER数据创建ECDSA公钥
+        const unsigned char* p = derData.data();
+        EC_KEY* ecKey = d2i_EC_PUBKEY(nullptr, &p, derData.size());
+        if (ecKey) {
+            // 将EC_KEY转换为DER格式
+            unsigned char* der = nullptr;
+            int derLen = i2d_EC_PUBKEY(ecKey, &der);
+            if (derLen > 0 && der) {
+                std::vector<uint8_t> keyDer(der, der + derLen);
+                OPENSSL_free(der);
+                
+                // 创建ECDSA公钥对象
+                auto ecdsaKey = std::make_shared<crypto::ECDSAPublicKey>(keyDer);
+                auto publicKey = adaptPublicKey(ecdsaKey);
+                
+                if (publicKey) {
+                    std::vector<std::shared_ptr<PublicKey>> roleKeys = {publicKey};
+                    
+                    if (role == RoleName::TimestampRole) {
+                        timestamp = BaseRole(role, 1, roleKeys);
+                    } else if (role == RoleName::SnapshotRole) {
+                        snapshot = BaseRole(role, 1, roleKeys);
+                    }
+                }
             }
+            EC_KEY_free(ecKey);
         }
     }
 
@@ -1080,116 +1098,11 @@ Error Repository::initializeTUFMetadata(const BaseRole& root,
         snapshotJson["signed"] = snapshotJsonSigned;
         snapshotJson["signatures"] = snapshotSig;
         
-        // 创建并签名timestamp.json
-        json timestampJsonSigned;
-        timestampJsonSigned["_type"] = getRoleType(RoleName::TimestampRole);
-        timestampJsonSigned["version"] = 1;
-        
-        auto timestampExpiry = getDefaultExpiry(RoleName::TimestampRole);
-        auto timestampExpTime = std::chrono::system_clock::to_time_t(timestampExpiry);
-        std::stringstream tmss;
-        tmss << std::put_time(std::localtime(&timestampExpTime), "%Y-%m-%dT%H:%M:%S%z");
-        timestampJsonSigned["expires"] = tmss.str();
-        
-        // 添加snapshot的元数据
-        json timestampMeta;
-        timestampMeta["snapshot.json"] = createFileMeta(snapshotJson);
-        timestampJsonSigned["meta"] = timestampMeta;
-        
-        // 签名timestamp元数据
-        json timestampSig = json::array();
-        if (!timestamp.Keys().empty()) {
-            auto timestampKeyID = timestamp.Keys()[0]->ID();
-            auto privKeyResult = cryptoService_.GetPrivateKey(timestampKeyID);
-            if (privKeyResult.ok()) {
-                // 创建签名
-                std::string canonicalTimestamp = timestampJsonSigned.dump();
-                
-                // 计算数据的SHA-256哈希
-                unsigned char hash[EVP_MAX_MD_SIZE];
-                unsigned int hashLen;
-                EVP_MD_CTX* mdctx = EVP_MD_CTX_new();
-                if (mdctx == nullptr) {
-                    return Error("Failed to create MD context");
-                }
-                
-                if (EVP_DigestInit_ex(mdctx, EVP_sha256(), nullptr) != 1) {
-                    EVP_MD_CTX_free(mdctx);
-                    return Error("Failed to initialize digest");
-                }
-                
-                if (EVP_DigestUpdate(mdctx, canonicalTimestamp.c_str(), canonicalTimestamp.length()) != 1) {
-                    EVP_MD_CTX_free(mdctx);
-                    return Error("Failed to update digest");
-                }
-                
-                if (EVP_DigestFinal_ex(mdctx, hash, &hashLen) != 1) {
-                    EVP_MD_CTX_free(mdctx);
-                    return Error("Failed to finalize digest");
-                }
-                
-                EVP_MD_CTX_free(mdctx);
-                
-                // 使用私钥签名哈希
-                auto ecdsaPrivKey = std::dynamic_pointer_cast<crypto::ECDSAPrivateKey>(privKeyResult.value());
-                if (ecdsaPrivKey) {
-                    // 将DER数据转换为EC_KEY
-                    EC_KEY* ecKey = nullptr;
-                    const unsigned char* p = ecdsaPrivKey->GetDERData().data();
-                    ecKey = d2i_ECPrivateKey(nullptr, &p, ecdsaPrivKey->GetDERData().size());
-                    
-                    if (ecKey) {
-                        // 创建签名上下文
-                        ECDSA_SIG* signature = ECDSA_do_sign(hash, hashLen, ecKey);
-                        if (signature) {
-                            // 将签名序列化为DER格式
-                            unsigned char* sig_bytes = nullptr;
-                            int sig_len = i2d_ECDSA_SIG(signature, &sig_bytes);
-                            
-                            if (sig_len > 0 && sig_bytes) {
-                                // Base64编码签名
-                                BIO* b64 = BIO_new(BIO_f_base64());
-                                BIO* mem = BIO_new(BIO_s_mem());
-                                BIO_push(b64, mem);
-                                BIO_write(b64, sig_bytes, sig_len);
-                                BIO_flush(b64);
-                                
-                                BUF_MEM* bptr;
-                                BIO_get_mem_ptr(b64, &bptr);
-                                std::string b64sig(bptr->data, bptr->length);
-                                
-                                // 移除可能存在的换行符
-                                b64sig.erase(std::remove(b64sig.begin(), b64sig.end(), '\n'), b64sig.end());
-                                
-                                // 添加签名到timestampSig
-                                json sigObj;
-                                sigObj["keyid"] = timestampKeyID;
-                                sigObj["method"] = "ecdsa";
-                                sigObj["sig"] = b64sig;
-                                timestampSig.push_back(sigObj);
-                                
-                                // 清理资源
-                                BIO_free_all(b64);
-                                OPENSSL_free(sig_bytes);
-                            }
-                            ECDSA_SIG_free(signature);
-                        }
-                        EC_KEY_free(ecKey);
-                    }
-                }
-            }
-        }
-        
-        json timestampJson;
-        timestampJson["signed"] = timestampJsonSigned;
-        timestampJson["signatures"] = timestampSig;
-        
         // 保存所有元数据文件
         std::string gunStr = gun_.empty() ? "default" : gun_;
         cache_.Set(gunStr, "root.json", rootJson);
         cache_.Set(gunStr, "targets.json", targetsJson);
         cache_.Set(gunStr, "snapshot.json", snapshotJson);
-        cache_.Set(gunStr, "timestamp.json", timestampJson);
         
         return Error();
     } catch (const std::exception& e) {

@@ -164,7 +164,6 @@ cd ..
   - root.json - 包含所有角色的公钥和阈值信息
   - targets.json - 目标文件的元数据（当前为空）
   - snapshot.json - 包含其他元数据文件的哈希和版本信息
-  - timestamp.json - 指向最新snapshot的元数据
 - 支持配置服务器管理的角色（默认只有Timestamp由服务器管理）
 
 #### 2. 目标管理 (Target Management)
