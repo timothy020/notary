@@ -4,6 +4,7 @@
 #include <CLI/CLI.hpp>
 #include "notary/server/server.hpp"
 #include "notary/crypto/crypto_service.hpp"
+#include "notary/utils/logger.hpp"
 
 int main(int argc, char* argv[]) {
     CLI::App app{"Notary服务器 - TUF元数据管理"};
@@ -13,11 +14,23 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> repoPrefixes;
     std::string trustDir = ".";
     
+    // 日志配置
+    std::string logLevel = "info";
+    std::string logFormat = "json";
+    std::string logOutput = "console";
+    std::string logFile = "notary-server.log";
+    
     // 添加命令行参数
     app.add_option("--addr", addr, "服务器监听地址, 格式: host:port");
     app.add_option("--key-algorithm", keyAlgorithm, "密钥算法, 支持: ecdsa, rsa, ed25519");
     app.add_option("--repo-prefix", repoPrefixes, "仓库前缀, 可多次指定");
     app.add_option("--trust-dir", trustDir, "信任数据目录");
+    
+    // 添加日志配置选项
+    app.add_option("--log-level", logLevel, "日志级别: debug, info, warn, error, fatal, panic");
+    app.add_option("--log-format", logFormat, "日志格式: json, text");
+    app.add_option("--log-output", logOutput, "日志输出: console, file");
+    app.add_option("--log-file", logFile, "日志文件路径(当log-output为file时使用)");
     
     // 解析命令行参数
     try {
@@ -26,16 +39,27 @@ int main(int argc, char* argv[]) {
         return app.exit(e);
     }
     
+    // 初始化默认日志系统
+    notary::utils::GetLogger().Initialize(logLevel, logFormat, logOutput);
+    
     // 打印配置
-    std::cout << "Notary服务器配置:" << std::endl;
-    std::cout << "  监听地址: " << addr << std::endl;
-    std::cout << "  密钥算法: " << keyAlgorithm << std::endl;
-    std::cout << "  信任目录: " << trustDir << std::endl;
+    notary::utils::GetLogger().Info("Notary服务器配置", 
+        notary::utils::LogContext()
+            .With("addr", addr)
+            .With("keyAlgorithm", keyAlgorithm)
+            .With("trustDir", trustDir)
+            .With("logLevel", logLevel)
+            .With("logFormat", logFormat)
+            .With("logOutput", logOutput));
+    
     if (!repoPrefixes.empty()) {
-        std::cout << "  仓库前缀:" << std::endl;
-        for (const auto& prefix : repoPrefixes) {
-            std::cout << "    - " << prefix << std::endl;
+        std::string prefixesStr;
+        for (size_t i = 0; i < repoPrefixes.size(); ++i) {
+            if (i > 0) prefixesStr += ", ";
+            prefixesStr += repoPrefixes[i];
         }
+        notary::utils::GetLogger().Info("仓库前缀", 
+            notary::utils::LogContext().With("prefixes", prefixesStr));
     }
     
     // 创建加密服务
@@ -49,11 +73,18 @@ int main(int argc, char* argv[]) {
     config.keyAlgorithm = keyAlgorithm;
     config.repoPrefixes = repoPrefixes;
     
+    // 设置日志配置
+    config.logging.level = logLevel;
+    config.logging.format = logFormat;
+    config.logging.output = logOutput;
+    config.logging.file = logFile;
+    
     // 创建并运行服务器
     notary::server::Server server(config);
     auto err = server.Run();
     if (err.Code() != 0) { // 0 = NoError
-        std::cerr << "服务器启动失败: " << err.Detail() << std::endl;
+        notary::utils::GetLogger().Fatal("服务器启动失败", 
+            notary::utils::LogContext().With("error", err.Detail()));
         return 1;
     }
     

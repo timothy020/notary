@@ -1,0 +1,17 @@
+{
+  "server": {
+    "addr": "localhost:4443",
+    "key_algorithm": "ecdsa",
+    "repo_prefixes": [
+      "docker.io/library/",
+      "docker.io/notary/"
+    ],
+    "trust_dir": "./data"
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "output": "console",
+    "file": "notary-server.log"
+  }
+} 

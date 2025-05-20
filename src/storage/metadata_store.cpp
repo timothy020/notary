@@ -182,6 +182,7 @@ Result<json> RemoteStore::GetRemote(const std::string& gun, const std::string& r
     }
     
     // 构建URL - 使用metaExtension_扩展名
+    // 例："http://localhost:4443/v2/docker.io/library/myapp/_trust/tuf/root.json"
     std::string url = serverURL_ + "/v2/" + gun + "/_trust/tuf/" + role + "." + metaExtension_;
     
     // 设置CURL选项

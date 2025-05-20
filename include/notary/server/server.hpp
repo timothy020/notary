@@ -66,12 +66,21 @@ private:
                    std::map<std::string, std::string>& params);
 };
 
+// 日志配置
+struct LoggingConfig {
+    std::string level = "info";     // 日志级别: debug, info, warn, error, fatal, panic
+    std::string format = "json";    // 日志格式: json, text
+    std::string output = "console"; // 日志输出: console, file
+    std::string file = "notary-server.log"; // 日志文件路径(当output为file时使用)
+};
+
 // 服务器配置
 struct Config {
     std::string addr;
     crypto::CryptoService* cryptoService;
     std::string keyAlgorithm;
     std::vector<std::string> repoPrefixes;
+    LoggingConfig logging;  // 日志配置
 };
 
 // 服务器
@@ -82,6 +91,7 @@ public:
     
 private:
     void setupRoutes();
+    void setupLogger();
     void handleHttpRequest(const std::string& method, const httplib::Request& req, httplib::Response& res);
     
     Config config_;

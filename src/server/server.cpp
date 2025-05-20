@@ -4,6 +4,7 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include "notary/types.hpp"
+#include "notary/utils/logger.hpp"
 
 namespace notary {
 namespace server {
@@ -64,18 +65,48 @@ Error Router::HandleRequest(const Context& ctx, Response& response) {
                 Context newCtx = ctx;
                 newCtx.request.params = params;
                 
+                // 记录路由匹配信息
+                utils::GetLogger().Debug("匹配到路由", 
+                    utils::LogContext()
+                        .With("method", route.method)
+                        .With("path", route.path)
+                        .With("requestPath", ctx.request.path));
+                
                 // 调用处理函数
                 return route.handler(newCtx, response);
             }
         }
     }
     
+    // 记录未找到路由的信息
+    utils::GetLogger().Warn("未找到匹配的路由", 
+        utils::LogContext()
+            .With("method", ctx.request.method)
+            .With("path", ctx.request.path));
+    
     // 没有匹配的路由，返回404
     return handlers::NotFoundHandler(ctx, response);
 }
 
 Server::Server(const Config& config) : config_(config) {
+    setupLogger();
     setupRoutes();
+}
+
+void Server::setupLogger() {
+    // 初始化日志系统
+    utils::GetLogger().Initialize(
+        config_.logging.level,
+        config_.logging.format,
+        config_.logging.output
+    );
+    
+    // 记录初始化信息
+    utils::GetLogger().Info("初始化notary服务器", 
+        utils::LogContext()
+            .With("address", config_.addr)
+            .With("logLevel", config_.logging.level)
+            .With("logFormat", config_.logging.format));
 }
 
 void Server::setupRoutes() {
@@ -98,10 +129,13 @@ void Server::setupRoutes() {
     
     // 处理元数据删除请求
     router_.AddRoute("DELETE", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/", handlers::DeleteHandler);
+    
+    utils::GetLogger().Debug("路由设置完成");
 }
 
 Error Server::Run() {
-    std::cout << "启动notary服务器，监听地址: " << config_.addr << std::endl;
+    utils::GetLogger().Info("启动notary服务器", 
+        utils::LogContext().With("address", config_.addr));
     
     // 解析地址和端口
     std::string host;
@@ -128,10 +162,22 @@ Error Server::Run() {
         try {
             std::rethrow_exception(ep);
         } catch (std::exception& e) {
+            // 记录异常
+            utils::GetLogger().Error("服务器异常", 
+                utils::LogContext()
+                    .With("exception", e.what())
+                    .With("path", req.path)
+                    .With("method", req.method));
+            
             res.status = 500;
             res.set_content("{\"errors\":[{\"code\":\"INTERNAL_SERVER_ERROR\",\"message\":\"" + 
                             std::string(e.what()) + "\"}]}", "application/json");
         } catch (...) {
+            utils::GetLogger().Error("服务器未知异常", 
+                utils::LogContext()
+                    .With("path", req.path)
+                    .With("method", req.method));
+            
             res.status = 500;
             res.set_content("{\"errors\":[{\"code\":\"INTERNAL_SERVER_ERROR\",\"message\":\"Unknown error\"}]}", 
                             "application/json");
@@ -143,7 +189,20 @@ Error Server::Run() {
     
     // 创建全局处理程序
     server.set_logger([](const auto& req, const auto& res) {
-        std::cout << req.method << " " << req.path << " - " << res.status << std::endl;
+        utils::LogContext ctx;
+        ctx.WithField("method", req.method);
+        ctx.WithField("path", req.path);
+        ctx.WithField("status", std::to_string(res.status));
+        ctx.WithField("remoteAddr", req.remote_addr);
+        
+        // 根据状态码选择日志级别
+        if (res.status >= 500) {
+            utils::GetLogger().Error("HTTP请求完成", ctx);
+        } else if (res.status >= 400) {
+            utils::GetLogger().Warn("HTTP请求完成", ctx);
+        } else {
+            utils::GetLogger().Info("HTTP请求完成", ctx);
+        }
     });
     
     // 添加所有路由
@@ -160,7 +219,16 @@ Error Server::Run() {
     });
     
     // 启动服务器
+    utils::GetLogger().Info("服务器开始监听", 
+        utils::LogContext()
+            .With("host", host)
+            .With("port", std::to_string(port)));
+    
     if (!server.listen(host.c_str(), port)) {
+        utils::GetLogger().Fatal("无法启动服务器", 
+            utils::LogContext()
+                .With("host", host)
+                .With("port", std::to_string(port)));
         return Error(1, "无法启动服务器"); // ErrUnknown
     }
     
@@ -168,6 +236,13 @@ Error Server::Run() {
 }
 
 void Server::handleHttpRequest(const std::string& method, const httplib::Request& req, httplib::Response& res) {
+    // 记录请求开始
+    utils::GetLogger().Debug("开始处理HTTP请求", 
+        utils::LogContext()
+            .With("method", method)
+            .With("path", req.path)
+            .With("remoteAddr", req.remote_addr));
+    
     // 创建请求上下文
     Request request;
     request.method = method;
@@ -177,6 +252,16 @@ void Server::handleHttpRequest(const std::string& method, const httplib::Request
     // 转换headers
     for (const auto& header : req.headers) {
         request.headers[header.first] = header.second;
+        
+        // 记录重要的请求头
+        if (header.first == "Content-Type" || 
+            header.first == "Authorization" || 
+            header.first == "User-Agent") {
+            utils::GetLogger().Debug("请求头", 
+                utils::LogContext()
+                    .With("name", header.first)
+                    .With("value", header.second));
+        }
     }
     
     // 创建上下文
@@ -196,6 +281,15 @@ void Server::handleHttpRequest(const std::string& method, const httplib::Request
     if (err.Code() != 0) { // 0 = NoError
         response.status = err.HTTPStatusCode();
         
+        // 记录错误信息
+        utils::GetLogger().Warn("请求处理出错", 
+            utils::LogContext()
+                .With("code", std::to_string(err.Code()))
+                .With("message", err.Detail())
+                .With("statusCode", std::to_string(response.status))
+                .With("method", method)
+                .With("path", req.path));
+        
         // 如果有错误，设置JSON格式的错误信息
         json errorJson = {
             {"errors", {
@@ -208,6 +302,13 @@ void Server::handleHttpRequest(const std::string& method, const httplib::Request
         
         response.body = errorJson.dump();
         response.headers["Content-Type"] = "application/json";
+    } else {
+        // 记录请求成功
+        utils::GetLogger().Debug("请求处理成功", 
+            utils::LogContext()
+                .With("method", method)
+                .With("path", req.path)
+                .With("status", std::to_string(response.status)));
     }
     
     // 设置响应头
