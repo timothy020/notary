@@ -386,13 +386,11 @@ Error FileChangelist::Close() {
 } // namespace changelist
 
 Repository::Repository(const std::string& trustDir, const std::string& serverURL)
-    : baseURL_(serverURL)
-    , cache_(trustDir)
-    , remoteStore_(serverURL, "json", "key") {
-    
-    // 创建changelist目录路径
-    std::string changelistDir = trustDir + "/changelist";
-    changelist_ = std::make_unique<changelist::FileChangelist>(changelistDir);
+    : trustDir_(trustDir)
+    , serverURL_(serverURL)
+    , cache_(std::make_shared<storage::MetadataStore>(trustDir))
+    , remoteStore_(std::make_shared<storage::RemoteStore>(serverURL))
+    , changelist_(std::make_shared<changelist::FileChangelist>(trustDir)) {
 }
 
 void Repository::SetPassphrase(const std::string& passphrase) {
@@ -508,7 +506,7 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<PublicKey>>& rootK
 
     // 获取远程角色密钥
     for (const auto& role : remoteRoles) {
-        auto keyResult = remoteStore_.GetKey(gun_.empty() ? "default" : gun_, 
+        auto keyResult = remoteStore_->GetKey(gun_.empty() ? "default" : gun_, 
                                           role == RoleName::TimestampRole ? "timestamp" : "snapshot");
         if (!keyResult.ok()) {
             std::cerr << "Failed to get remote key : " << keyResult.error().what() << std::endl;
@@ -1100,9 +1098,9 @@ Error Repository::initializeTUFMetadata(const BaseRole& root,
         
         // 保存所有元数据文件
         std::string gunStr = gun_.empty() ? "default" : gun_;
-        cache_.Set(gunStr, "root.json", rootJson);
-        cache_.Set(gunStr, "targets.json", targetsJson);
-        cache_.Set(gunStr, "snapshot.json", snapshotJson);
+        cache_->Set(gunStr, "root.json", rootJson);
+        cache_->Set(gunStr, "targets.json", targetsJson);
+        cache_->Set(gunStr, "snapshot.json", snapshotJson);
         
         return Error();
     } catch (const std::exception& e) {
@@ -1239,7 +1237,7 @@ Error Repository::applyChangelist() {
         
         // 获取当前targets元数据
         std::string gunStr = gun_.empty() ? "default" : gun_;
-        auto result = cache_.Get(gunStr, "targets.json");
+        auto result = cache_->Get(gunStr, "targets.json");
         if (!result.ok()) {
             return Error("Could not load targets metadata");
         }
@@ -1302,7 +1300,7 @@ Error Repository::applyChangelist() {
             targetsData["signed"]["expires"] = ss.str();
             
             // 保存更新后的元数据
-            auto err = cache_.Set(gunStr, "targets.json", targetsData);
+            auto err = cache_->Set(gunStr, "targets.json", targetsData);
             if (!err.ok()) {
                 return Error(std::string("Failed to save target metadata: ") + err.what());
             }
@@ -1316,24 +1314,270 @@ Error Repository::applyChangelist() {
 
 Error Repository::Publish() {
     try {
+        // 尝试更新TUF元数据
+        auto err = updateTUF(true);
+        bool initialPublish = false;
+        
+        if (!err.ok()) {
+            // 检查是否是首次发布
+            if (std::string(err.what()).find("Repository not found") != std::string::npos) {
+                // 尝试初始化仓库
+                err = bootstrapRepo();
+                if (!err.ok() && std::string(err.what()).find("Metadata not found") != std::string::npos) {
+                    std::cout << "No TUF data found locally or remotely - initializing repository " 
+                              << (gun_.empty() ? "default" : gun_) << " for the first time" << std::endl;
+                    err = Initialize({});
+                }
+                if (!err.ok()) {
+                    std::cerr << "Unable to load or initialize repository during first publish: " 
+                              << err.what() << std::endl;
+                    return err;
+                }
+                initialPublish = true;
+            } else {
+                std::cerr << "Could not publish Repository since we could not update: " 
+                          << err.what() << std::endl;
+                return err;
+            }
+        }
         // 应用changelist
-        auto err = applyChangelist();
+        err = applyChangelist();
         if (!err.ok()) {
             return err;
         }
-        
         // 清除changelist
         err = changelist_->Clear("");
         if (!err.ok()) {
             std::cerr << "Warning: Unable to clear changelist. You may want to manually delete the folder "
                       << changelist_->Location() << std::endl;
         }
-        
-        // TODO: 推送到远程服务器
-        
+        // 获取所有需要推送的元数据
+        std::string gunStr = gun_.empty() ? "default" : gun_;
+        std::map<std::string, std::vector<uint8_t>> updatedFiles;
+        // 处理Root文件
+        auto rootResult = cache_->Get(gunStr, "root.json");
+        if (rootResult.ok()) {
+            if (needsResigning(rootResult.value()) || initialPublish) {
+                auto signedRoot = resignMetadata(rootResult.value(), "root");
+                if (!signedRoot.ok()) {
+                    return Error(std::string("Failed to resign root metadata: ") + signedRoot.error().what());
+                }
+                updatedFiles["root"] = signedRoot.value();
+            } else {
+                std::string rootStr = rootResult.value().dump();
+                updatedFiles["root"] = std::vector<uint8_t>(rootStr.begin(), rootStr.end());
+            }
+        }
+        // 处理Targets文件
+        auto targetsResult = cache_->Get(gunStr, "targets.json");
+        if (targetsResult.ok()) {
+            if (needsResigning(targetsResult.value()) || initialPublish) {
+                auto signedTargets = resignMetadata(targetsResult.value(), "targets");
+                if (!signedTargets.ok()) {
+                    return Error(std::string("Failed to resign targets metadata: ") + signedTargets.error().what());
+                }
+                updatedFiles["targets"] = signedTargets.value();
+            } else {
+                std::string targetsStr = targetsResult.value().dump();
+                updatedFiles["targets"] = std::vector<uint8_t>(targetsStr.begin(), targetsStr.end());
+            }
+        }
+        // 处理Snapshot文件
+        auto snapshotResult = cache_->Get(gunStr, "snapshot.json");
+        if (snapshotResult.ok()) {
+            if (needsResigning(snapshotResult.value()) || initialPublish) {
+                auto signedSnapshot = resignMetadata(snapshotResult.value(), "snapshot");
+                if (!signedSnapshot.ok()) {
+                    std::cout << "Client does not have the key to sign snapshot. "
+                              << "Assuming that server should sign the snapshot." << std::endl;
+                } else {
+                    updatedFiles["snapshot"] = signedSnapshot.value();
+                }
+            } else {
+                std::string snapshotStr = snapshotResult.value().dump();
+                updatedFiles["snapshot"] = std::vector<uint8_t>(snapshotStr.begin(), snapshotStr.end());
+            }
+        } else {
+            // 如果没有snapshot文件，尝试初始化
+            err = initializeSnapshot();
+            if (!err.ok()) {
+                std::cerr << "Failed to initialize snapshot: " << err.what() << std::endl;
+                return err;
+            }
+        }
+        // 推送到远程服务器
+        for (const auto& [role, data] : updatedFiles) {
+            err = remoteStore_->SetRemote(gunStr, role, data);
+            if (!err.ok()) {
+                return Error(std::string("Failed to publish ") + role + " metadata: " + err.what());
+            }
+        }
         return Error(); // 成功
     } catch (const std::exception& e) {
         return Error(std::string("Failed to publish: ") + e.what());
+    }
+}
+
+Error Repository::updateTUF(bool force) {
+    try {
+        std::string gunStr = gun_.empty() ? "default" : gun_;
+        
+        // 尝试从远程获取最新的元数据
+        auto rootResult = remoteStore_->GetRemote(gunStr, "root");
+        if (!rootResult.ok()) {
+            return Error("Repository not found");
+        }
+        
+        // 更新本地缓存
+        auto err = cache_->Set(gunStr, "root.json", rootResult.value());
+        if (!err.ok()) {
+            return err;
+        }
+        
+        // 获取并更新其他角色的元数据
+        std::vector<std::string> roles = {"targets", "snapshot"};
+        for (const auto& role : roles) {
+            auto result = remoteStore_->GetRemote(gunStr, role);
+            if (result.ok()) {
+                err = cache_->Set(gunStr, role + ".json", result.value());
+                if (!err.ok()) {
+                    return err;
+                }
+            }
+        }
+        
+        return Error();
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to update TUF: ") + e.what());
+    }
+}
+
+Error Repository::bootstrapRepo() {
+    try {
+        std::string gunStr = gun_.empty() ? "default" : gun_;
+        
+        // 尝试从本地缓存加载元数据
+        auto rootResult = cache_->Get(gunStr, "root.json");
+        if (!rootResult.ok()) {
+            return Error("Metadata not found");
+        }
+        
+        return Error();
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to bootstrap repository: ") + e.what());
+    }
+}
+
+bool Repository::needsResigning(const std::vector<uint8_t>& metadata) {
+    try {
+        // 解析元数据
+        json meta = json::parse(metadata);
+        
+        // 检查过期时间
+        if (meta.contains("expires")) {
+            auto expires = meta["expires"].get<std::string>();
+            auto expiryTime = std::chrono::system_clock::from_time_t(
+                std::stoll(expires));
+            auto now = std::chrono::system_clock::now();
+            
+            // 如果过期时间在24小时内，需要重新签名
+            return (expiryTime - now) < std::chrono::hours(24);
+        }
+        
+        return false;
+    } catch (const std::exception&) {
+        return true; // 如果解析失败，为了安全起见重新签名
+    }
+}
+
+Result<std::vector<uint8_t>> Repository::resignMetadata(const std::vector<uint8_t>& metadata, const std::string& role) {
+    try {
+        // 解析元数据
+        json meta = json::parse(metadata);
+        // 更新签名时间
+        auto now = std::chrono::system_clock::now();
+        auto nowTimeT = std::chrono::system_clock::to_time_t(now);
+        meta["signed"]["timestamp"] = nowTimeT;
+        // 更新过期时间
+        RoleName roleName;
+        if (role == "root") {
+            roleName = RoleName::RootRole;
+        } else if (role == "targets") {
+            roleName = RoleName::TargetsRole;
+        } else if (role == "snapshot") {
+            roleName = RoleName::SnapshotRole;
+        } else {
+            return Result<std::vector<uint8_t>>(Error("Invalid role: " + role));
+        }
+        auto expiry = getDefaultExpiry(roleName);
+        meta["signed"]["expires"] = std::chrono::system_clock::to_time_t(expiry);
+        // 获取角色的所有密钥
+        auto keys = cryptoService_.ListKeys(roleName);
+        if (keys.empty()) {
+            return Result<std::vector<uint8_t>>(Error("No keys found for role: " + role));
+        }
+        // 使用第一个密钥重新签名
+        auto keyResult = cryptoService_.GetPrivateKey(keys[0]);
+        if (!keyResult.ok()) {
+            return Result<std::vector<uint8_t>>(keyResult.error());
+        }
+        // 类型转换，确保有Sign方法
+        auto notaryPrivKey = std::dynamic_pointer_cast<notary::PrivateKey>(keyResult.value());
+        if (!notaryPrivKey) {
+            return Result<std::vector<uint8_t>>(Error("PrivateKey类型转换失败，无法签名"));
+        }
+        // 序列化元数据
+        std::string metadataStr = meta["signed"].dump();
+        std::vector<uint8_t> metadataBytes(metadataStr.begin(), metadataStr.end());
+        // 使用私钥签名
+        auto signatureResult = notaryPrivKey->Sign(metadataBytes);
+        if (!signatureResult.ok()) {
+            return Result<std::vector<uint8_t>>(signatureResult.error());
+        }
+        // 更新签名
+        meta["signatures"] = json::array();
+        meta["signatures"].push_back({
+            {"keyid", keys[0]},
+            {"sig", base64Encode(signatureResult.value())}
+        });
+        // 返回新的元数据
+        std::string resultStr = meta.dump();
+        std::vector<uint8_t> result(resultStr.begin(), resultStr.end());
+        return Result<std::vector<uint8_t>>(result);
+    } catch (const std::exception& e) {
+        return Result<std::vector<uint8_t>>(Error(std::string("Failed to resign metadata: ") + e.what()));
+    }
+}
+
+Error Repository::initializeSnapshot() {
+    try {
+        std::string gunStr = gun_.empty() ? "default" : gun_;
+        
+        // 创建新的snapshot元数据
+        json snapshot = {
+            {"signed", {
+                {"_type", "snapshot"},
+                {"version", 1},
+                {"expires", std::to_string(
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        getDefaultExpiry(RoleName::SnapshotRole).time_since_epoch()).count())},
+                {"meta", {}}
+            }}
+        };
+        
+        // 获取并添加targets元数据
+        auto targetsResult = cache_->Get(gunStr, "targets.json");
+        if (targetsResult.ok()) {
+            auto targetsHash = calculateHashes(targetsResult.value());
+            snapshot["signed"]["meta"]["targets.json"] = createFileMeta(targetsHash);
+        }
+        
+        // 序列化并存储
+        std::string jsonStr = snapshot.dump();
+        std::vector<uint8_t> snapshotData(jsonStr.begin(), jsonStr.end());
+        return cache_->Set(gunStr, "snapshot.json", snapshotData);
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to initialize snapshot: ") + e.what());
     }
 }
 

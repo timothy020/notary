@@ -149,13 +149,30 @@ private:
     // 应用changelist
     Error applyChangelist();
 
+    // 更新TUF元数据
+    Error updateTUF(bool force = false);
+    
+    // 引导仓库
+    Error bootstrapRepo();
+    
+    // 检查元数据是否需要重新签名
+    bool needsResigning(const std::vector<uint8_t>& metadata);
+    
+    // 重新签名元数据
+    Result<std::vector<uint8_t>> resignMetadata(const std::vector<uint8_t>& metadata, 
+                                              const std::string& role);
+    
+    // 初始化Snapshot
+    Error initializeSnapshot();
+
 private:
-    GUN gun_;                    // 全局唯一名称
-    std::string baseURL_;        // 服务器URL
-    CryptoService cryptoService_;// 加密服务
-    MetadataStore cache_;        // 元数据缓存
-    RemoteStore remoteStore_;    // 远程存储
-    std::unique_ptr<changelist::Changelist> changelist_; // 变更列表
+    GUN gun_;
+    std::string trustDir_;
+    std::string serverURL_;
+    std::shared_ptr<storage::MetadataStore> cache_;
+    std::shared_ptr<storage::RemoteStore> remoteStore_;
+    std::shared_ptr<changelist::Changelist> changelist_;
+    crypto::CryptoService cryptoService_;
 };
 
 } // namespace notary 

@@ -82,22 +82,22 @@ void Server::setupRoutes() {
     // 添加路由
     router_.AddRoute("GET", "/v2/", handlers::MainHandler);
     
-    // 处理密钥获取请求
-    router_.AddRoute("GET", "/v2/{gun:[^*]+}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::GetKeyHandler);
+    // 处理密钥获取请求 - 修改gun匹配模式以支持多段路径
+    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::GetKeyHandler);
     
     // 处理密钥轮换请求
-    router_.AddRoute("POST", "/v2/{gun:[^*]+}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::RotateKeyHandler);
+    router_.AddRoute("POST", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::RotateKeyHandler);
     
     // 处理元数据更新请求
-    router_.AddRoute("POST", "/v2/{gun:[^*]+}/_trust/tuf/", handlers::AtomicUpdateHandler);
+    router_.AddRoute("POST", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/", handlers::AtomicUpdateHandler);
     
     // 处理元数据获取请求
-    router_.AddRoute("GET", "/v2/{gun:[^*]+}/_trust/tuf/{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.{checksum:[a-fA-F0-9]{64}|[a-fA-F0-9]{96}|[a-fA-F0-9]{128}}.json", handlers::GetHandler);
-    router_.AddRoute("GET", "/v2/{gun:[^*]+}/_trust/tuf/{version:[1-9]*[0-9]+}.{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.json", handlers::GetHandler);
-    router_.AddRoute("GET", "/v2/{gun:[^*]+}/_trust/tuf/{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.{checksum:[a-fA-F0-9]{64}|[a-fA-F0-9]{96}|[a-fA-F0-9]{128}}.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{version:[1-9]*[0-9]+}.{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.json", handlers::GetHandler);
     
     // 处理元数据删除请求
-    router_.AddRoute("DELETE", "/v2/{gun:[^*]+}/_trust/tuf/", handlers::DeleteHandler);
+    router_.AddRoute("DELETE", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/", handlers::DeleteHandler);
 }
 
 Error Server::Run() {
