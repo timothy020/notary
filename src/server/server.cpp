@@ -113,22 +113,39 @@ void Server::setupRoutes() {
     // 添加路由
     router_.AddRoute("GET", "/v2/", handlers::MainHandler);
     
-    // 处理密钥获取请求 - 修改gun匹配模式以支持多段路径
-    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::GetKeyHandler);
+    // 处理密钥获取请求 - 简化匹配模式
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::GetKeyHandler);
     
     // 处理密钥轮换请求
-    router_.AddRoute("POST", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::RotateKeyHandler);
+    router_.AddRoute("POST", "/v2/{gun:.+}/_trust/tuf/{tufRole:snapshot|timestamp}.key", handlers::RotateKeyHandler);
     
     // 处理元数据更新请求
-    router_.AddRoute("POST", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/", handlers::AtomicUpdateHandler);
+    router_.AddRoute("POST", "/v2/{gun:.+}/_trust/tuf/", handlers::AtomicUpdateHandler);
     
-    // 处理元数据获取请求
-    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.{checksum:[a-fA-F0-9]{64}|[a-fA-F0-9]{96}|[a-fA-F0-9]{128}}.json", handlers::GetHandler);
-    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{version:[1-9]*[0-9]+}.{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.json", handlers::GetHandler);
-    router_.AddRoute("GET", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/{tufRole:root|targets(?:/[^/\\s]+)*|snapshot|timestamp}.json", handlers::GetHandler);
+    // 处理元数据获取请求 - 大幅简化正则表达式
+    // 基本角色的标准形式
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/root.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/targets.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/snapshot.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/timestamp.json", handlers::GetHandler);
+    
+    // 带版本号的形式
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/{version:[0-9]+}.root.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/{version:[0-9]+}.targets.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/{version:[0-9]+}.snapshot.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/{version:[0-9]+}.timestamp.json", handlers::GetHandler);
+    
+    // 带校验和的形式 - 使用通配形式避免复杂正则表达式
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/root.{checksum:[a-fA-F0-9]+}.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/targets.{checksum:[a-fA-F0-9]+}.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/snapshot.{checksum:[a-fA-F0-9]+}.json", handlers::GetHandler);
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/timestamp.{checksum:[a-fA-F0-9]+}.json", handlers::GetHandler);
+    
+    // 处理委托目标（delegated targets）
+    router_.AddRoute("GET", "/v2/{gun:.+}/_trust/tuf/targets/{delegatedRole:.+}.json", handlers::GetHandler);
     
     // 处理元数据删除请求
-    router_.AddRoute("DELETE", "/v2/{gun:[^/]+(?:/[^/]+)*}/_trust/tuf/", handlers::DeleteHandler);
+    router_.AddRoute("DELETE", "/v2/{gun:.+}/_trust/tuf/", handlers::DeleteHandler);
     
     utils::GetLogger().Debug("路由设置完成");
 }
@@ -269,6 +286,7 @@ void Server::handleHttpRequest(const std::string& method, const httplib::Request
     ctx.request = request;
     ctx.cryptoService = config_.cryptoService;
     ctx.keyAlgorithm = config_.keyAlgorithm;
+    ctx.storageService = config_.storageService;
     
     // 创建响应对象
     Response response;

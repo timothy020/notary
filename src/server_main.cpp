@@ -5,6 +5,7 @@
 #include "notary/server/server.hpp"
 #include "notary/crypto/crypto_service.hpp"
 #include "notary/utils/logger.hpp"
+#include "server/storage/file_storage.hpp"
 
 int main(int argc, char* argv[]) {
     CLI::App app{"Notary服务器 - TUF元数据管理"};
@@ -13,6 +14,7 @@ int main(int argc, char* argv[]) {
     std::string keyAlgorithm = "ecdsa";
     std::vector<std::string> repoPrefixes;
     std::string trustDir = ".";
+    std::string storagePath = "./data";
     
     // 日志配置
     std::string logLevel = "info";
@@ -25,6 +27,7 @@ int main(int argc, char* argv[]) {
     app.add_option("--key-algorithm", keyAlgorithm, "密钥算法, 支持: ecdsa, rsa, ed25519");
     app.add_option("--repo-prefix", repoPrefixes, "仓库前缀, 可多次指定");
     app.add_option("--trust-dir", trustDir, "信任数据目录");
+    app.add_option("--storage", storagePath, "元数据存储路径");
     
     // 添加日志配置选项
     app.add_option("--log-level", logLevel, "日志级别: debug, info, warn, error, fatal, panic");
@@ -48,6 +51,7 @@ int main(int argc, char* argv[]) {
             .With("addr", addr)
             .With("keyAlgorithm", keyAlgorithm)
             .With("trustDir", trustDir)
+            .With("storagePath", storagePath)
             .With("logLevel", logLevel)
             .With("logFormat", logFormat)
             .With("logOutput", logOutput));
@@ -66,12 +70,16 @@ int main(int argc, char* argv[]) {
     notary::crypto::CryptoService cryptoService;
     cryptoService.SetDefaultPassphrase("server");
     
+    // 创建文件存储服务
+    notary::server::storage::FileStorageService storageService(storagePath);
+    
     // 创建服务器配置
     notary::server::Config config;
     config.addr = addr;
     config.cryptoService = &cryptoService;
     config.keyAlgorithm = keyAlgorithm;
     config.repoPrefixes = repoPrefixes;
+    config.storageService = &storageService;
     
     // 设置日志配置
     config.logging.level = logLevel;
