@@ -25,11 +25,11 @@ FileStorageService::FileStorageService(const std::string& baseDir) : baseDir_(ba
 
 Result<Metadata> FileStorageService::GetMetadata(const MetadataRequest& request) {
     std::lock_guard<std::mutex> lock(mutex_);
+    
     try {
         std::string rolePath;
         if (request.checksum.empty() && request.version == 0) {
             // 获取最新版本
-            utils::GetLogger().Info("获取最新版本");
             auto versionResult = getLatestVersion(request.gun, request.roleName);
             if (!versionResult.ok()) {
                 return Result<Metadata>(versionResult.error());
@@ -220,10 +220,7 @@ std::string FileStorageService::calculateChecksum(const std::string& data) const
 std::string FileStorageService::buildMetadataPath(const std::string& gun, const std::string& role, 
                                               int version, const std::string& checksum) const {
     std::string basePath = baseDir_ + "/" + gun + "/_trust/tuf/";
-    // 日志输出basePath
-    utils::GetLogger().Info("构建元数据路径",
-        utils::LogContext()
-            .With("basePath", basePath));
+    
     if (!checksum.empty()) {
         return basePath + role + "." + checksum + ".json";
     } else if (version > 0) {
@@ -246,10 +243,6 @@ Result<int> FileStorageService::getLatestVersion(const std::string& gun, const s
         if (!entry.is_regular_file()) continue;
         
         std::string filename = entry.path().filename().string();
-        // 打印filename
-        utils::GetLogger().Info("filename",
-            utils::LogContext()
-                .With("filename", filename));
         std::smatch matches;
         if (std::regex_match(filename, matches, versionRegex)) {
             int version = std::stoi(matches[1].str());

@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
     app.add_option("--key-algorithm", keyAlgorithm, "密钥算法, 支持: ecdsa, rsa, ed25519");
     app.add_option("--repo-prefix", repoPrefixes, "仓库前缀, 可多次指定");
     app.add_option("--trust-dir", trustDir, "信任数据目录");
-    app.add_option("--storage", storagePath, "元数据存储路径");
+    app.add_option("--storage", storagePath, "元数据存储路径，测试脚本生成的元数据存放在 ./data");
     
     // 添加日志配置选项
     app.add_option("--log-level", logLevel, "日志级别: debug, info, warn, error, fatal, panic");
