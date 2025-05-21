@@ -1,4 +1,5 @@
 #include "notary/repository.hpp"
+#include "notary/tuf/repo.hpp"
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -391,6 +392,10 @@ Repository::Repository(const std::string& trustDir, const std::string& serverURL
     , cache_(std::make_shared<storage::MetadataStore>(trustDir))
     , remoteStore_(std::make_shared<storage::RemoteStore>(serverURL))
     , changelist_(std::make_shared<changelist::FileChangelist>(trustDir)) {
+    
+    // 初始化TUF Repo
+    tufRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
+    invalidRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
 }
 
 void Repository::SetPassphrase(const std::string& passphrase) {
@@ -1102,6 +1107,33 @@ Error Repository::initializeTUFMetadata(const BaseRole& root,
         cache_->Set(gunStr, "targets.json", targetsJson);
         cache_->Set(gunStr, "snapshot.json", snapshotJson);
         
+        // 初始化内存中的TUF Repo对象
+        tufRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
+        
+        // 初始化Repo中的角色
+        auto err = tufRepo_->InitRoot(root, targets, snapshot, timestamp);
+        if (!err.ok()) {
+            return err;
+        }
+        
+        // 初始化Targets
+        err = tufRepo_->InitTargets();
+        if (!err.ok()) {
+            return err;
+        }
+        
+        // 初始化Snapshot
+        err = tufRepo_->InitSnapshot();
+        if (!err.ok()) {
+            return err;
+        }
+        
+        // 初始化Timestamp
+        err = tufRepo_->InitTimestamp();
+        if (!err.ok()) {
+            return err;
+        }
+        
         return Error();
     } catch (const std::exception& e) {
         return Error(std::string("Failed to initialize TUF metadata: ") + e.what());
@@ -1219,6 +1251,15 @@ Error Repository::AddTarget(const Target& target, const std::vector<std::string>
             auto err = changelist_->Add(change);
             if (!err.ok()) {
                 return err;
+            }
+            
+            // 如果是targets角色，也在内存的tufRepo中添加
+            if (role == "targets" && tufRepo_) {
+                RoleName roleName = RoleName::TargetsRole;
+                err = tufRepo_->AddTarget(target.name, content, roleName);
+                if (!err.ok()) {
+                    return err;
+                }
             }
         }
         

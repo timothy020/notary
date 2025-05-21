@@ -7,6 +7,7 @@ file(GLOB_RECURSE SOURCES
     "storage/*.cpp"
     "config/*.cpp"
     "utils/*.cpp"
+    "tuf/*.cpp"
 )
 
 # 创建库
@@ -21,6 +22,7 @@ add_library(notary_lib
     server/errors/errors.cpp
     utils/logger.cpp
     server_main.cpp
+    tuf/repo.cpp
 )
 
 # 设置包含目录

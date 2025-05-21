@@ -7,6 +7,7 @@
 #include "notary/crypto/crypto_service.hpp"
 #include "notary/storage/metadata_store.hpp"
 #include "notary/types.hpp"
+#include "notary/tuf/repo.hpp"
 
 namespace notary {
 
@@ -128,6 +129,9 @@ public:
     
     // 发布更改
     Error Publish();
+    
+    // 获取TUF Repo对象
+    std::shared_ptr<tuf::Repo> GetTUFRepo() { return tufRepo_; }
 
 private:
     // 初始化角色
@@ -173,6 +177,8 @@ private:
     std::shared_ptr<storage::RemoteStore> remoteStore_;
     std::shared_ptr<changelist::Changelist> changelist_;
     crypto::CryptoService cryptoService_;
+    std::shared_ptr<tuf::Repo> tufRepo_; // 元数据的内存表示
+    std::shared_ptr<tuf::Repo> invalidRepo_; // 无效的元数据
 };
 
 } // namespace notary 

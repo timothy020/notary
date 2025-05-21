@@ -72,12 +72,16 @@ public:
 // 基础角色
 class BaseRole {
 public:
+    // 默认构造函数 - 为了满足std::map的要求
+    BaseRole() : name_(RoleName::RootRole), threshold_(0) {}
+    
     BaseRole(RoleName name, int threshold, std::vector<std::shared_ptr<PublicKey>> keys)
         : name_(name), threshold_(threshold), keys_(std::move(keys)) {}
     
     RoleName Name() const { return name_; }
     int Threshold() const { return threshold_; }
     const std::vector<std::shared_ptr<PublicKey>>& Keys() const { return keys_; }
+    std::vector<std::shared_ptr<PublicKey>>& Keys() { return keys_; }
     
 private:
     RoleName name_;
