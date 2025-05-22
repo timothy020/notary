@@ -203,7 +203,7 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
     utils::GetLogger().Info("处理原子更新请求", 
         utils::LogContext()
             .With("gun", gun)
-            .With("contentLength", std::to_string(ctx.request.body.size())));
+            .With("files", std::to_string(ctx.request.files.size())));
     
     // 检查存储服务是否可用
     if (!ctx.storageService) {
@@ -217,86 +217,20 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
         return Error::ErrNoCryptoService;
     }
     
-    // 检查Content-Type，确保是multipart/form-data
-    auto contentTypeIt = ctx.request.headers.find("Content-Type");
-    if (contentTypeIt == ctx.request.headers.end() || 
-        contentTypeIt->second.find("multipart/form-data") == std::string::npos) {
-        utils::GetLogger().Error("请求不是multipart/form-data格式",
-            utils::LogContext().With("contentType", 
-                contentTypeIt != ctx.request.headers.end() ? contentTypeIt->second : "未指定"));
-        return Error(5, "无效的请求格式，需要multipart/form-data"); // ErrMalformedUpload
-    }
-    
-    // 解析boundary
-    std::string boundary;
-    size_t boundaryPos = contentTypeIt->second.find("boundary=");
-    if (boundaryPos != std::string::npos) {
-        boundary = contentTypeIt->second.substr(boundaryPos + 9); // 9是"boundary="的长度
-        // 处理引号
-        if (!boundary.empty() && boundary.front() == '"' && boundary.back() == '"') {
-            boundary = boundary.substr(1, boundary.size() - 2);
-        }
-    } else {
-        utils::GetLogger().Error("无法解析multipart/form-data boundary");
-        return Error(5, "无法解析multipart/form-data boundary"); // ErrMalformedUpload
+    // 检查是否有上传的文件
+    if (ctx.request.files.empty()) {
+        utils::GetLogger().Error("没有上传的文件");
+        return Error(5, "没有上传的文件"); // ErrMalformedUpload
     }
     
     // 存储所有角色的更新
     std::vector<MetaUpdate> updates;
     
     try {
-        // 解析multipart数据
-        const std::string& body = ctx.request.body;
-        std::string delimiter = "--" + boundary;
-        std::string closeDelimiter = delimiter + "--";
-        
-        size_t pos = body.find(delimiter);
-        while (pos != std::string::npos) {
-            // 移动到分隔符之后
-            pos += delimiter.size();
-            
-            // 检查是否是结束分隔符
-            if (body.compare(pos, closeDelimiter.size() - delimiter.size(), "--") == 0) {
-                break;
-            }
-            
-            // 跳过换行符
-            if (body[pos] == '\r') pos++;
-            if (body[pos] == '\n') pos++;
-            
-            // 找到下一个分隔符位置
-            size_t nextPos = body.find(delimiter, pos);
-            if (nextPos == std::string::npos) {
-                nextPos = body.find(closeDelimiter, pos);
-                if (nextPos == std::string::npos) {
-                    utils::GetLogger().Error("无法找到multipart分隔符");
-                    return Error(5, "无法解析multipart/form-data数据"); // ErrMalformedUpload
-                }
-            }
-            
-            // 提取part内容
-            std::string part = body.substr(pos, nextPos - pos);
-            
-            // 提取Content-Disposition和filename
-            size_t headerEnd = part.find("\r\n\r\n");
-            if (headerEnd == std::string::npos) {
-                utils::GetLogger().Error("无法解析part头");
-                return Error(5, "无法解析multipart/form-data part头"); // ErrMalformedUpload
-            }
-            
-            std::string header = part.substr(0, headerEnd);
-            std::string content = part.substr(headerEnd + 4); // 跳过"\r\n\r\n"
-            
-            // 提取filename参数
-            size_t filenamePos = header.find("filename=");
-            if (filenamePos == std::string::npos) {
-                utils::GetLogger().Error("无法找到filename参数");
-                return Error(6, "请求缺少filename参数"); // ErrNoFilename
-            }
-            
-            size_t filenameStart = header.find("\"", filenamePos) + 1;
-            size_t filenameEnd = header.find("\"", filenameStart);
-            std::string filename = header.substr(filenameStart, filenameEnd - filenameStart);
+        // 处理所有上传的文件
+        for (const auto& [field_name, file] : ctx.request.files) {
+            // 获取文件名
+            const std::string& filename = file.filename;
             
             // 去除.json后缀获取角色名
             std::string roleName = filename;
@@ -336,7 +270,7 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
             // 解析元数据JSON
             try {
                 // 解析JSON以获取版本号
-                auto j = json::parse(content);
+                auto j = json::parse(file.content);
                 auto signed_data = j["signed"];
                 
                 if (!signed_data.contains("_type") || !signed_data.contains("version")) {
@@ -351,12 +285,14 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
                 update.role = role;
                 update.roleName = roleName;
                 update.version = version;
-                update.data = content;
+                update.data = file.content;
                 
                 updates.push_back(update);
                 
                 utils::GetLogger().Debug("解析元数据成功", 
                     utils::LogContext()
+                        .With("field", field_name)
+                        .With("filename", filename)
                         .With("role", roleName)
                         .With("version", std::to_string(version)));
                 
@@ -367,9 +303,6 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
                         .With("role", roleName));
                 return Error(7, "无法解析元数据JSON: " + std::string(e.what())); // ErrMalformedJSON
             }
-            
-            // 更新位置到下一个分隔符
-            pos = nextPos;
         }
         
         // 验证更新
@@ -410,9 +343,9 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
         }
         
         // 返回成功响应
-        resp.body = "{}";
-        resp.headers["Content-Type"] = "application/json";
-        return Error();
+    resp.body = "{}";
+    resp.headers["Content-Type"] = "application/json";
+    return Error();
         
     } catch (const std::exception& e) {
         utils::GetLogger().Error("处理原子更新请求失败", 

@@ -264,6 +264,7 @@ void Server::handleHttpRequest(const std::string& method, const httplib::Request
         utils::LogContext()
             .With("method", method)
             .With("path", req.path)
+            .With("body", req.body)
             .With("remoteAddr", req.remote_addr));
     
     // 创建请求上下文
@@ -271,6 +272,23 @@ void Server::handleHttpRequest(const std::string& method, const httplib::Request
     request.method = method;
     request.path = req.path;
     request.body = req.body;
+    
+    // 处理上传的文件
+    for (const auto& [field_name, file] : req.files) {
+        utils::GetLogger().Debug("收到文件", 
+            utils::LogContext()
+                .With("字段名", field_name)
+                .With("文件名", file.filename)
+                .With("内容类型", file.content_type)
+                .With("内容长度", std::to_string(file.content.length())));
+        
+        // 将文件内容和文件名添加到请求中
+        request.files[field_name] = {
+            file.filename,
+            file.content_type,
+            file.content
+        };
+    }
     
     // 转换headers
     for (const auto& header : req.headers) {
