@@ -213,8 +213,8 @@ void Delegations::fromJson(const json& j) {
     }
 }
 
-// SignedRoot 实现
-json SignedRoot::toJson() const {
+// Root 实现
+json Root::toJson() const {
     json j = Common.toJson();
     
     // 添加keys
@@ -244,11 +244,17 @@ json SignedRoot::toJson() const {
     }
     j["roles"] = roles;
     
+    j["consistent_snapshot"] = ConsistentSnapshot;
+    
     return j;
 }
 
-void SignedRoot::fromJson(const json& j) {
+void Root::fromJson(const json& j) {
     Common.fromJson(j);
+    
+    if (j.contains("consistent_snapshot")) {
+        ConsistentSnapshot = j.at("consistent_snapshot").get<bool>();
+    }
     
     // 解析keys（简化处理）
     if (j.contains("keys")) {
@@ -261,50 +267,8 @@ void SignedRoot::fromJson(const json& j) {
     }
 }
 
-json SignedRoot::toSignedJson() const {
-    json j;
-    j["signed"] = toJson();
-    
-    json signatures = json::array();
-    for (const auto& sig : Signatures) {
-        signatures.push_back(sig.toJson());
-    }
-    j["signatures"] = signatures;
-    
-    return j;
-}
-
-std::vector<uint8_t> SignedRoot::Serialize() const {
-    std::string jsonStr = toSignedJson().dump();
-    return std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
-}
-
-bool SignedRoot::Deserialize(const std::vector<uint8_t>& data) {
-    try {
-        std::string jsonStr(data.begin(), data.end());
-        json j = json::parse(jsonStr);
-        
-        if (j.contains("signed")) {
-            fromJson(j["signed"]);
-        }
-        
-        if (j.contains("signatures")) {
-            Signatures.clear();
-            for (const auto& sigJson : j["signatures"]) {
-                Signature sig;
-                sig.fromJson(sigJson);
-                Signatures.push_back(sig);
-            }
-        }
-        
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
-}
-
-// SignedTargets 实现
-json SignedTargets::toJson() const {
+// Targets 实现
+json Targets::toJson() const {
     json j = Common.toJson();
     
     // 添加targets
@@ -322,17 +286,74 @@ json SignedTargets::toJson() const {
     return j;
 }
 
-void SignedTargets::fromJson(const json& j) {
+void Targets::fromJson(const json& j) {
     Common.fromJson(j);
     
     if (j.contains("targets")) {
         // 简化处理
     }
+    
+    if (j.contains("delegations")) {
+        Delegations.fromJson(j.at("delegations"));
+    }
 }
 
-json SignedTargets::toSignedJson() const {
+// Snapshot 实现
+json Snapshot::toJson() const {
+    json j = Common.toJson();
+    
+    // 添加meta
+    json meta;
+    for (const auto& [name, fileMeta] : Meta) {
+        meta[name] = fileMeta.toJson();
+    }
+    j["meta"] = meta;
+    
+    return j;
+}
+
+void Snapshot::fromJson(const json& j) {
+    Common.fromJson(j);
+    
+    if (j.contains("meta")) {
+        // 简化处理
+    }
+}
+
+// Timestamp 实现
+json Timestamp::toJson() const {
+    json j = Common.toJson();
+    
+    // 添加meta
+    json meta;
+    for (const auto& [name, fileMeta] : Meta) {
+        meta[name] = fileMeta.toJson();
+    }
+    j["meta"] = meta;
+    
+    return j;
+}
+
+void Timestamp::fromJson(const json& j) {
+    Common.fromJson(j);
+    
+    if (j.contains("meta")) {
+        // 简化处理
+    }
+}
+
+// SignedRoot 实现
+json SignedRoot::toJson() const {
+    return Signed.toJson();
+}
+
+void SignedRoot::fromJson(const json& j) {
+    Signed.fromJson(j);
+}
+
+json SignedRoot::toSignedJson() const {
     json j;
-    j["signed"] = toJson();
+    j["signed"] = Signed.toJson();
     
     json signatures = json::array();
     for (const auto& sig : Signatures) {
@@ -341,6 +362,124 @@ json SignedTargets::toSignedJson() const {
     j["signatures"] = signatures;
     
     return j;
+}
+
+// SignedRoot ToSigned 方法 - 对应Go版本的ToSigned
+Result<std::shared_ptr<notary::tuf::Signed>> SignedRoot::ToSigned() const {
+    // 对内部Signed结构进行规范化JSON编码（类似Go的MarshalCanonical）
+    json signedJson = Signed.toJson();
+    
+    // 生成规范化的JSON字符串（sorted keys, no whitespace）
+    std::string canonicalJson = signedJson.dump(-1, ' ', false, json::error_handler_t::strict);
+    
+    // 转换为字节数组
+    std::vector<uint8_t> signedBytes(canonicalJson.begin(), canonicalJson.end());
+    
+    // 创建新的Signed对象
+    auto result = std::make_shared<notary::tuf::Signed>();
+    
+    // 拷贝已有签名
+    result->Signatures = Signatures;
+    
+    // 存储规范化的JSON数据（类似Go的json.RawMessage）
+    result->signedData = signedBytes;
+    
+    return Result<std::shared_ptr<notary::tuf::Signed>>(result);
+}
+
+std::vector<uint8_t> SignedRoot::Serialize() const {
+    std::string jsonStr = toSignedJson().dump();
+    return std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
+}
+
+bool SignedRoot::Deserialize(const std::vector<uint8_t>& data) {
+    try {
+        std::string jsonStr(data.begin(), data.end());
+        json j = json::parse(jsonStr);
+        
+        if (j.contains("signed")) {
+            Signed.fromJson(j["signed"]);
+        }
+        
+        if (j.contains("signatures")) {
+            Signatures.clear();
+            for (const auto& sigJson : j["signatures"]) {
+                Signature sig;
+                sig.fromJson(sigJson);
+                Signatures.push_back(sig);
+            }
+        }
+        
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+// SignedRoot BuildBaseRole 方法
+Result<BaseRole> SignedRoot::BuildBaseRole(RoleName roleName) const {
+    auto it = Signed.Roles.find(roleName);
+    if (it == Signed.Roles.end()) {
+        return Result<BaseRole>(Error("Role not found in root file"));
+    }
+    
+    // Get all public keys for the base role from TUF metadata
+    const auto& role = it->second;
+    std::vector<std::shared_ptr<PublicKey>> pubKeys;
+    
+    for (const auto& key : role.Keys()) {
+        std::string keyID = key->ID();
+        auto keyIt = Signed.Keys.find(keyID);
+        if (keyIt == Signed.Keys.end()) {
+            return Result<BaseRole>(Error("Key with ID " + keyID + " was not found in root metadata"));
+        }
+        pubKeys.push_back(keyIt->second);
+    }
+    
+    BaseRole baseRole(roleName, role.Threshold(), pubKeys);
+    return Result<BaseRole>(baseRole);
+}
+
+// SignedTargets 实现
+json SignedTargets::toJson() const {
+    return Signed.toJson();
+}
+
+void SignedTargets::fromJson(const json& j) {
+    Signed.fromJson(j);
+}
+
+json SignedTargets::toSignedJson() const {
+    json j;
+    j["signed"] = Signed.toJson();
+    
+    json signatures = json::array();
+    for (const auto& sig : Signatures) {
+        signatures.push_back(sig.toJson());
+    }
+    j["signatures"] = signatures;
+    
+    return j;
+}
+
+// SignedTargets ToSigned 方法 - 对应Go版本的ToSigned
+Result<std::shared_ptr<notary::tuf::Signed>> SignedTargets::ToSigned() const {
+    // 对内部Signed结构进行规范化JSON编码
+    json signedJson = Signed.toJson();
+    
+    // 生成规范化的JSON字符串
+    std::string canonicalJson = signedJson.dump(-1, ' ', false, json::error_handler_t::strict);
+    
+    // 创建新的Signed对象
+    auto result = std::make_shared<notary::tuf::Signed>();
+    
+    // 拷贝已有签名
+    result->Signatures = Signatures;
+    
+    // 存储规范化的JSON数据
+    result->signedData = std::vector<uint8_t>(canonicalJson.begin(), canonicalJson.end());
+    
+    return Result<std::shared_ptr<notary::tuf::Signed>>(result);
 }
 
 std::vector<uint8_t> SignedTargets::Serialize() const {
@@ -354,7 +493,7 @@ bool SignedTargets::Deserialize(const std::vector<uint8_t>& data) {
         json j = json::parse(jsonStr);
         
         if (j.contains("signed")) {
-            fromJson(j["signed"]);
+            Signed.fromJson(j["signed"]);
         }
         
         if (j.contains("signatures")) {
@@ -374,15 +513,15 @@ bool SignedTargets::Deserialize(const std::vector<uint8_t>& data) {
 
 // SignedTargets 新方法实现
 FileMeta* SignedTargets::GetMeta(const std::string& path) {
-    auto it = Targets.find(path);
-    if (it != Targets.end()) {
+    auto it = Signed.Targets.find(path);
+    if (it != Signed.Targets.end()) {
         return &(it->second);
     }
     return nullptr;
 }
 
 void SignedTargets::AddTarget(const std::string& path, const FileMeta& meta) {
-    Targets[path] = meta;
+    Signed.Targets[path] = meta;
     Dirty = true;
 }
 
@@ -400,29 +539,16 @@ Result<DelegationRole> SignedTargets::BuildDelegationRole(RoleName roleName) con
 
 // SignedSnapshot 实现
 json SignedSnapshot::toJson() const {
-    json j = Common.toJson();
-    
-    // 添加meta
-    json meta;
-    for (const auto& [name, fileMeta] : Meta) {
-        meta[name] = fileMeta.toJson();
-    }
-    j["meta"] = meta;
-    
-    return j;
+    return Signed.toJson();
 }
 
 void SignedSnapshot::fromJson(const json& j) {
-    Common.fromJson(j);
-    
-    if (j.contains("meta")) {
-        // 简化处理
-    }
+    Signed.fromJson(j);
 }
 
 json SignedSnapshot::toSignedJson() const {
     json j;
-    j["signed"] = toJson();
+    j["signed"] = Signed.toJson();
     
     json signatures = json::array();
     for (const auto& sig : Signatures) {
@@ -431,6 +557,26 @@ json SignedSnapshot::toSignedJson() const {
     j["signatures"] = signatures;
     
     return j;
+}
+
+// SignedSnapshot ToSigned 方法 - 对应Go版本的ToSigned
+Result<std::shared_ptr<notary::tuf::Signed>> SignedSnapshot::ToSigned() const {
+    // 对内部Signed结构进行规范化JSON编码
+    json signedJson = Signed.toJson();
+    
+    // 生成规范化的JSON字符串
+    std::string canonicalJson = signedJson.dump(-1, ' ', false, json::error_handler_t::strict);
+    
+    // 创建新的Signed对象
+    auto result = std::make_shared<notary::tuf::Signed>();
+    
+    // 拷贝已有签名
+    result->Signatures = Signatures;
+    
+    // 存储规范化的JSON数据
+    result->signedData = std::vector<uint8_t>(canonicalJson.begin(), canonicalJson.end());
+    
+    return Result<std::shared_ptr<notary::tuf::Signed>>(result);
 }
 
 std::vector<uint8_t> SignedSnapshot::Serialize() const {
@@ -444,7 +590,7 @@ bool SignedSnapshot::Deserialize(const std::vector<uint8_t>& data) {
         json j = json::parse(jsonStr);
         
         if (j.contains("signed")) {
-            fromJson(j["signed"]);
+            Signed.fromJson(j["signed"]);
         }
         
         if (j.contains("signatures")) {
@@ -464,14 +610,14 @@ bool SignedSnapshot::Deserialize(const std::vector<uint8_t>& data) {
 
 // SignedSnapshot 新方法实现
 void SignedSnapshot::AddMeta(RoleName role, const FileMeta& meta) {
-    Meta[roleNameToString(role) + ".json"] = meta;
+    Signed.Meta[roleNameToString(role) + ".json"] = meta;
     Dirty = true;
 }
 
 Result<FileMeta> SignedSnapshot::GetMeta(RoleName role) const {
     std::string roleName = roleNameToString(role) + ".json";
-    auto it = Meta.find(roleName);
-    if (it != Meta.end()) {
+    auto it = Signed.Meta.find(roleName);
+    if (it != Signed.Meta.end()) {
         return Result<FileMeta>(it->second);
     }
     return Result<FileMeta>(Error("Meta not found for role: " + roleNameToString(role)));
@@ -479,38 +625,25 @@ Result<FileMeta> SignedSnapshot::GetMeta(RoleName role) const {
 
 void SignedSnapshot::DeleteMeta(RoleName role) {
     std::string roleName = roleNameToString(role) + ".json";
-    auto it = Meta.find(roleName);
-    if (it != Meta.end()) {
-        Meta.erase(it);
+    auto it = Signed.Meta.find(roleName);
+    if (it != Signed.Meta.end()) {
+        Signed.Meta.erase(it);
         Dirty = true;
     }
 }
 
 // SignedTimestamp 实现
 json SignedTimestamp::toJson() const {
-    json j = Common.toJson();
-    
-    // 添加meta
-    json meta;
-    for (const auto& [name, fileMeta] : Meta) {
-        meta[name] = fileMeta.toJson();
-    }
-    j["meta"] = meta;
-    
-    return j;
+    return Signed.toJson();
 }
 
 void SignedTimestamp::fromJson(const json& j) {
-    Common.fromJson(j);
-    
-    if (j.contains("meta")) {
-        // 简化处理
-    }
+    Signed.fromJson(j);
 }
 
 json SignedTimestamp::toSignedJson() const {
     json j;
-    j["signed"] = toJson();
+    j["signed"] = Signed.toJson();
     
     json signatures = json::array();
     for (const auto& sig : Signatures) {
@@ -519,6 +652,26 @@ json SignedTimestamp::toSignedJson() const {
     j["signatures"] = signatures;
     
     return j;
+}
+
+// SignedTimestamp ToSigned 方法 - 对应Go版本的ToSigned
+Result<std::shared_ptr<notary::tuf::Signed>> SignedTimestamp::ToSigned() const {
+    // 对内部Signed结构进行规范化JSON编码
+    json signedJson = Signed.toJson();
+    
+    // 生成规范化的JSON字符串
+    std::string canonicalJson = signedJson.dump(-1, ' ', false, json::error_handler_t::strict);
+    
+    // 创建新的Signed对象
+    auto result = std::make_shared<notary::tuf::Signed>();
+    
+    // 拷贝已有签名
+    result->Signatures = Signatures;
+    
+    // 存储规范化的JSON数据
+    result->signedData = std::vector<uint8_t>(canonicalJson.begin(), canonicalJson.end());
+    
+    return Result<std::shared_ptr<notary::tuf::Signed>>(result);
 }
 
 std::vector<uint8_t> SignedTimestamp::Serialize() const {
@@ -532,7 +685,7 @@ bool SignedTimestamp::Deserialize(const std::vector<uint8_t>& data) {
         json j = json::parse(jsonStr);
         
         if (j.contains("signed")) {
-            fromJson(j["signed"]);
+            Signed.fromJson(j["signed"]);
         }
         
         if (j.contains("signatures")) {
@@ -552,8 +705,8 @@ bool SignedTimestamp::Deserialize(const std::vector<uint8_t>& data) {
 
 // SignedTimestamp 新方法实现
 Result<FileMeta> SignedTimestamp::GetSnapshot() const {
-    auto it = Meta.find("snapshot.json");
-    if (it != Meta.end()) {
+    auto it = Signed.Meta.find("snapshot.json");
+    if (it != Signed.Meta.end()) {
         return Result<FileMeta>(it->second);
     }
     return Result<FileMeta>(Error("Snapshot meta not found in timestamp"));
@@ -646,8 +799,19 @@ Result<std::shared_ptr<SignedSnapshot>> Repo::InitSnapshot() {
         return Result<std::shared_ptr<SignedSnapshot>>(Error("Targets metadata not loaded"));
     }
     
+    // 使用ToSigned方法获取签名对象
+    auto rootSignedResult = root_->ToSigned();
+    if (!rootSignedResult.ok()) {
+        return Result<std::shared_ptr<SignedSnapshot>>(rootSignedResult.error());
+    }
+    
+    auto targetsSignedResult = targets->ToSigned();
+    if (!targetsSignedResult.ok()) {
+        return Result<std::shared_ptr<SignedSnapshot>>(targetsSignedResult.error());
+    }
+    
     // 使用NewSnapshot辅助函数创建新的SignedSnapshot对象
-    auto snapshotResult = NewSnapshot(root_, targets);
+    auto snapshotResult = NewSnapshot(rootSignedResult.value(), targetsSignedResult.value());
     if (!snapshotResult.ok()) {
         return snapshotResult;
     }
@@ -661,8 +825,14 @@ Result<std::shared_ptr<SignedTimestamp>> Repo::InitTimestamp() {
         return Result<std::shared_ptr<SignedTimestamp>>(Error("Snapshot metadata not loaded"));
     }
     
+    // 使用ToSigned方法获取签名对象
+    auto snapshotSignedResult = snapshot_->ToSigned();
+    if (!snapshotSignedResult.ok()) {
+        return Result<std::shared_ptr<SignedTimestamp>>(snapshotSignedResult.error());
+    }
+    
     // 使用NewTimestamp辅助函数创建新的SignedTimestamp对象
-    auto timestampResult = NewTimestamp(snapshot_);
+    auto timestampResult = NewTimestamp(snapshotSignedResult.value());
     if (!timestampResult.ok()) {
         return timestampResult;
     }
@@ -679,9 +849,9 @@ Error Repo::AddBaseKeys(RoleName role, const std::vector<std::shared_ptr<PublicK
     
     for (const auto& key : keys) {
         // 添加密钥到根元数据
-        root_->Keys[key->ID()] = key;
+        root_->Signed.Keys[key->ID()] = key;
         // 添加密钥ID到角色
-        root_->Roles[role].Keys().push_back(key);
+        root_->Signed.Roles[role].Keys().push_back(key);
     }
     
     root_->Dirty = true;
@@ -696,7 +866,7 @@ Error Repo::ReplaceBaseKeys(RoleName role, const std::vector<std::shared_ptr<Pub
     
     // 获取旧的密钥ID列表
     std::vector<std::string> oldKeyIDs;
-    for (const auto& key : root_->Roles[role].Keys()) {
+    for (const auto& key : root_->Signed.Roles[role].Keys()) {
         oldKeyIDs.push_back(key->ID());
     }
     
@@ -716,7 +886,7 @@ Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs
     }
     
     // 从角色中移除密钥ID
-    auto& roleKeys = root_->Roles[role].Keys();
+    auto& roleKeys = root_->Signed.Roles[role].Keys();
     roleKeys.erase(
         std::remove_if(roleKeys.begin(), roleKeys.end(),
             [&keyIDs](const std::shared_ptr<PublicKey>& key) {
@@ -727,7 +897,7 @@ Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs
     
     // 检查密钥是否仍被其他角色使用
     std::set<std::string> usedKeyIDs;
-    for (const auto& [roleName, roleInfo] : root_->Roles) {
+    for (const auto& [roleName, roleInfo] : root_->Signed.Roles) {
         if (roleName == role) continue; // 跳过当前角色
         for (const auto& key : roleInfo.Keys()) {
             usedKeyIDs.insert(key->ID());
@@ -738,7 +908,7 @@ Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs
     if (role != RoleName::RootRole) {
         for (const auto& keyID : keyIDs) {
             if (usedKeyIDs.find(keyID) == usedKeyIDs.end()) {
-                root_->Keys.erase(keyID);
+                root_->Signed.Keys.erase(keyID);
                 // 从加密服务中移除密钥
                 // cryptoService_.RemoveKey(keyID); // 需要实现此方法
             }
@@ -756,12 +926,7 @@ Result<BaseRole> Repo::GetBaseRole(RoleName name) const {
         return Result<BaseRole>(Error("Root metadata not loaded"));
     }
     
-    auto it = root_->Roles.find(name);
-    if (it == root_->Roles.end()) {
-        return Result<BaseRole>(Error("Role not found"));
-    }
-    
-    return Result<BaseRole>(it->second);
+    return root_->BuildBaseRole(name);
 }
 
 Result<DelegationRole> Repo::GetDelegationRole(RoleName name) const {
@@ -774,7 +939,7 @@ std::vector<BaseRole> Repo::GetAllLoadedRoles() const {
     std::vector<BaseRole> roles;
     
     if (root_) {
-        for (const auto& [roleName, role] : root_->Roles) {
+        for (const auto& [roleName, role] : root_->Signed.Roles) {
             roles.push_back(role);
         }
     }
@@ -820,7 +985,7 @@ Error Repo::AddTarget(const std::string& targetName, const std::vector<uint8_t>&
         return Error("Failed to create target meta: " + metaResult.error().what());
     }
     
-    targets->Targets[targetName] = metaResult.value();
+    targets->Signed.Targets[targetName] = metaResult.value();
     targets->Dirty = true;
     return Error();
 }
@@ -831,7 +996,7 @@ Error Repo::RemoveTarget(const std::string& targetName, RoleName role) {
         return Error("Targets metadata not found for role");
     }
     
-    targets->Targets.erase(targetName);
+    targets->Signed.Targets.erase(targetName);
     targets->Dirty = true;
     return Error();
 }
@@ -848,7 +1013,7 @@ Error Repo::RemoveTargets(RoleName role, const std::vector<std::string>& targets
     }
     
     for (const auto& targetName : targets) {
-        targetsMetadata->Targets.erase(targetName);
+        targetsMetadata->Signed.Targets.erase(targetName);
     }
     
     targetsMetadata->Dirty = true;
@@ -1013,19 +1178,19 @@ std::shared_ptr<SignedRoot> NewRoot(const std::map<std::string, std::shared_ptr<
                                    bool consistent) {
     auto newRoot = std::make_shared<SignedRoot>();
     
-    // 初始化通用字段
-    newRoot->Common.Type = "root";
-    newRoot->Common.Version = 0; // Go版本中初始版本为0
-    newRoot->Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 365 * 10); // 10年过期
+    // 初始化Root结构体
+    newRoot->Signed.Common.Type = "root";
+    newRoot->Signed.Common.Version = 0; // Go版本中初始版本为0
+    newRoot->Signed.Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 365 * 10); // 10年过期
     
     // 设置密钥
-    newRoot->Keys = keys;
+    newRoot->Signed.Keys = keys;
     
     // 设置角色
-    newRoot->Roles = roles;
+    newRoot->Signed.Roles = roles;
     
-    // 设置一致性快照标志（在当前结构中没有这个字段，需要扩展SignedRoot）
-    // newRoot->ConsistentSnapshot = consistent;
+    // 设置一致性快照标志
+    newRoot->Signed.ConsistentSnapshot = consistent;
     
     // 初始化签名数组
     newRoot->Signatures.clear();
@@ -1039,13 +1204,17 @@ std::shared_ptr<SignedRoot> NewRoot(const std::map<std::string, std::shared_ptr<
 std::shared_ptr<SignedTargets> NewTargets() {
     auto newTargets = std::make_shared<SignedTargets>();
     
-    // 初始化通用字段
-    newTargets->Common.Type = "targets";
-    newTargets->Common.Version = 0; // Go版本中初始版本为0
-    newTargets->Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 365); // 1年过期
+    // 初始化Targets结构体
+    newTargets->Signed.Common.Type = "targets";
+    newTargets->Signed.Common.Version = 0; // Go版本中初始版本为0
+    newTargets->Signed.Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 365); // 1年过期
     
     // 初始化targets为空
-    newTargets->Targets.clear();
+    newTargets->Signed.Targets.clear();
+    
+    // 初始化delegations为空
+    newTargets->Signed.Delegations.Keys.clear();
+    newTargets->Signed.Delegations.Roles.clear();
     
     // 初始化签名数组
     newTargets->Signatures.clear();
@@ -1060,10 +1229,10 @@ Result<std::shared_ptr<SignedSnapshot>> NewSnapshot(const std::shared_ptr<Signed
                                                     const std::shared_ptr<Signed>& targets) {
     auto newSnapshot = std::make_shared<SignedSnapshot>();
     
-    // 初始化通用字段
-    newSnapshot->Common.Type = "snapshot";
-    newSnapshot->Common.Version = 0; // Go版本中初始版本为0
-    newSnapshot->Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 365 * 3); // 3年过期
+    // 初始化Snapshot结构体
+    newSnapshot->Signed.Common.Type = "snapshot";
+    newSnapshot->Signed.Common.Version = 0; // Go版本中初始版本为0
+    newSnapshot->Signed.Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 365 * 3); // 3年过期
     
     // 序列化root和targets以计算元数据
     auto rootBytes = root->Serialize();
@@ -1091,8 +1260,8 @@ Result<std::shared_ptr<SignedSnapshot>> NewSnapshot(const std::shared_ptr<Signed
     }
     
     // 设置文件元数据映射
-    newSnapshot->Meta["root.json"] = rootMetaResult.value();
-    newSnapshot->Meta["targets.json"] = targetsMetaResult.value();
+    newSnapshot->Signed.Meta["root.json"] = rootMetaResult.value();
+    newSnapshot->Signed.Meta["targets.json"] = targetsMetaResult.value();
     
     // 初始化签名数组
     newSnapshot->Signatures.clear();
@@ -1106,10 +1275,10 @@ Result<std::shared_ptr<SignedSnapshot>> NewSnapshot(const std::shared_ptr<Signed
 Result<std::shared_ptr<SignedTimestamp>> NewTimestamp(const std::shared_ptr<Signed>& snapshot) {
     auto newTimestamp = std::make_shared<SignedTimestamp>();
     
-    // 初始化通用字段
-    newTimestamp->Common.Type = "timestamp";
-    newTimestamp->Common.Version = 0; // Go版本中初始版本为0
-    newTimestamp->Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 14); // 14天过期
+    // 初始化Timestamp结构体
+    newTimestamp->Signed.Common.Type = "timestamp";
+    newTimestamp->Signed.Common.Version = 0; // Go版本中初始版本为0
+    newTimestamp->Signed.Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 14); // 14天过期
     
     // 序列化snapshot以计算元数据
     auto snapshotBytes = snapshot->Serialize();
@@ -1129,7 +1298,7 @@ Result<std::shared_ptr<SignedTimestamp>> NewTimestamp(const std::shared_ptr<Sign
     }
     
     // 设置文件元数据映射
-    newTimestamp->Meta["snapshot.json"] = snapshotMetaResult.value();
+    newTimestamp->Signed.Meta["snapshot.json"] = snapshotMetaResult.value();
     
     // 初始化签名数组
     newTimestamp->Signatures.clear();
@@ -1175,6 +1344,62 @@ Result<FileMeta> NewFileMeta(const std::vector<uint8_t>& data,
     }
     
     return Result<FileMeta>(fileMeta);
+}
+
+// Signed 结构体方法实现
+std::vector<uint8_t> Signed::Serialize() const {
+    json j;
+    j["signatures"] = json::array();
+    for (const auto& sig : Signatures) {
+        j["signatures"].push_back(sig.toJson());
+    }
+    
+    // 将signedData作为原始JSON插入
+    if (!signedData.empty()) {
+        std::string jsonStr(signedData.begin(), signedData.end());
+        j["signed"] = json::parse(jsonStr);
+    }
+    
+    std::string result = j.dump();
+    return std::vector<uint8_t>(result.begin(), result.end());
+}
+
+bool Signed::Deserialize(const std::vector<uint8_t>& data) {
+    try {
+        std::string jsonStr(data.begin(), data.end());
+        json j = json::parse(jsonStr);
+        
+        if (j.contains("signatures")) {
+            Signatures.clear();
+            for (const auto& sigJson : j["signatures"]) {
+                Signature sig;
+                sig.fromJson(sigJson);
+                Signatures.push_back(sig);
+            }
+        }
+        
+        if (j.contains("signed")) {
+            std::string signedStr = j["signed"].dump();
+            signedData = std::vector<uint8_t>(signedStr.begin(), signedStr.end());
+        }
+        
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+json Signed::toJson() const {
+    if (!signedData.empty()) {
+        std::string jsonStr(signedData.begin(), signedData.end());
+        return json::parse(jsonStr);
+    }
+    return json::object();
+}
+
+void Signed::fromJson(const json& j) {
+    std::string jsonStr = j.dump();
+    signedData = std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
 }
 
 } // namespace tuf

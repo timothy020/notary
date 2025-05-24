@@ -92,51 +92,99 @@ struct Delegations {
     void fromJson(const json& j);
 };
 
-// 签名数据
-class Signed {
-public:
-    virtual ~Signed() = default;
-    virtual std::vector<uint8_t> Serialize() const = 0;
-    virtual bool Deserialize(const std::vector<uint8_t>& data) = 0;
-    virtual json toJson() const = 0;
-    virtual void fromJson(const json& j) = 0;
-    
-    bool Dirty = false;
+struct Signed {
+    std::vector<uint8_t> signedData;  // 存储规范化的JSON数据 (类似Go的json.RawMessage)
     std::vector<Signature> Signatures;
+    
+    // JSON 序列化支持
+    std::vector<uint8_t> Serialize() const;
+    bool Deserialize(const std::vector<uint8_t>& data);
+    json toJson() const;
+    void fromJson(const json& j);
 };
 
-// 签名的Root元数据
-class SignedRoot : public Signed {
-public:
-    // Root特有的属性和方法
+// Root元数据内容（对应Go的Root结构体）
+struct Root {
+    SignedCommon Common;
     std::map<std::string, std::shared_ptr<PublicKey>> Keys;
     std::map<RoleName, BaseRole> Roles;
-    SignedCommon Common;
+    bool ConsistentSnapshot = false;
     
-    virtual std::vector<uint8_t> Serialize() const override;
-    virtual bool Deserialize(const std::vector<uint8_t>& data) override;
-    virtual json toJson() const override;
-    virtual void fromJson(const json& j) override;
-    
-    // 构建完整的带签名的JSON
-    json toSignedJson() const;
+    // JSON 序列化支持
+    json toJson() const;
+    void fromJson(const json& j);
 };
 
-// 签名的Targets元数据
-class SignedTargets : public Signed {
-public:
-    // Targets特有的属性和方法
+// Targets元数据内容（对应Go的Targets结构体）
+struct Targets {
+    SignedCommon Common;
     std::map<std::string, FileMeta> Targets;  // Files类型：map[string]FileMeta
     Delegations Delegations;  // 委托信息
-    SignedCommon Common;
     
-    virtual std::vector<uint8_t> Serialize() const override;
-    virtual bool Deserialize(const std::vector<uint8_t>& data) override;
-    virtual json toJson() const override;
-    virtual void fromJson(const json& j) override;
+    // JSON 序列化支持
+    json toJson() const;
+    void fromJson(const json& j);
+};
+
+// Snapshot元数据内容（对应Go的Snapshot结构体）
+struct Snapshot {
+    SignedCommon Common;
+    std::map<std::string, FileMeta> Meta;  // Files类型：map[string]FileMeta
+    
+    // JSON 序列化支持
+    json toJson() const;
+    void fromJson(const json& j);
+};
+
+// Timestamp元数据内容（对应Go的Timestamp结构体）
+struct Timestamp {
+    SignedCommon Common;
+    std::map<std::string, FileMeta> Meta;  // Files类型：map[string]FileMeta
+    
+    // JSON 序列化支持
+    json toJson() const;
+    void fromJson(const json& j);
+};
+
+// 签名的Root元数据（对应Go的SignedRoot结构体）
+class SignedRoot{
+public:
+    Root Signed;  // 对应Go的Signed Root字段
+    bool Dirty = false;
+    std::vector<Signature> Signatures;
+    
+    virtual std::vector<uint8_t> Serialize() const;
+    virtual bool Deserialize(const std::vector<uint8_t>& data);
+    virtual json toJson() const;
+    virtual void fromJson(const json& j);
     
     // 构建完整的带签名的JSON
     json toSignedJson() const;
+    
+    // 对应Go的ToSigned方法 - 用于签名流程
+    Result<std::shared_ptr<notary::tuf::Signed>> ToSigned() const;
+    
+    // Root特有方法
+    Result<BaseRole> BuildBaseRole(RoleName roleName) const;
+};
+
+// 签名的Targets元数据（对应Go的SignedTargets结构体）
+class SignedTargets{
+public:
+    Targets Signed;  // 对应Go的Signed Targets字段
+    bool Dirty = false;
+    std::vector<Signature> Signatures;
+    
+    virtual std::vector<uint8_t> Serialize() const;
+    virtual bool Deserialize(const std::vector<uint8_t>& data);
+    virtual json toJson() const;
+    virtual void fromJson(const json& j);
+    
+    // 构建完整的带签名的JSON
+    json toSignedJson() const;
+    
+    // 对应Go的ToSigned方法 - 用于签名流程
+    Result<std::shared_ptr<notary::tuf::Signed>> ToSigned() const;
     
     // Targets特有方法
     FileMeta* GetMeta(const std::string& path);
@@ -145,20 +193,23 @@ public:
     Result<DelegationRole> BuildDelegationRole(RoleName roleName) const;
 };
 
-// 签名的Snapshot元数据
-class SignedSnapshot : public Signed {
+// 签名的Snapshot元数据（对应Go的SignedSnapshot结构体）
+class SignedSnapshot{
 public:
-    // Snapshot特有的属性和方法
-    std::map<std::string, FileMeta> Meta;  // Files类型：map[string]FileMeta
-    SignedCommon Common;
+    Snapshot Signed;  // 对应Go的Signed Snapshot字段
+    bool Dirty = false;
+    std::vector<Signature> Signatures;
     
-    virtual std::vector<uint8_t> Serialize() const override;
-    virtual bool Deserialize(const std::vector<uint8_t>& data) override;
-    virtual json toJson() const override;
-    virtual void fromJson(const json& j) override;
+    virtual std::vector<uint8_t> Serialize() const;
+    virtual bool Deserialize(const std::vector<uint8_t>& data);
+    virtual json toJson() const;
+    virtual void fromJson(const json& j);
     
     // 构建完整的带签名的JSON
     json toSignedJson() const;
+    
+    // 对应Go的ToSigned方法 - 用于签名流程
+    Result<std::shared_ptr<notary::tuf::Signed>> ToSigned() const;
     
     // Snapshot特有方法
     void AddMeta(RoleName role, const FileMeta& meta);
@@ -166,20 +217,23 @@ public:
     void DeleteMeta(RoleName role);
 };
 
-// 签名的Timestamp元数据
-class SignedTimestamp : public Signed {
+// 签名的Timestamp元数据（对应Go的SignedTimestamp结构体）
+class SignedTimestamp{
 public:
-    // Timestamp特有的属性和方法
-    std::map<std::string, FileMeta> Meta;  // Files类型：map[string]FileMeta
-    SignedCommon Common;
+    Timestamp Signed;  // 对应Go的Signed Timestamp字段
+    bool Dirty = false;
+    std::vector<Signature> Signatures;
     
-    virtual std::vector<uint8_t> Serialize() const override;
-    virtual bool Deserialize(const std::vector<uint8_t>& data) override;
-    virtual json toJson() const override;
-    virtual void fromJson(const json& j) override;
+    virtual std::vector<uint8_t> Serialize() const;
+    virtual bool Deserialize(const std::vector<uint8_t>& data);
+    virtual json toJson() const;
+    virtual void fromJson(const json& j);
     
     // 构建完整的带签名的JSON
     json toSignedJson() const;
+    
+    // 对应Go的ToSigned方法 - 用于签名流程
+    Result<std::shared_ptr<notary::tuf::Signed>> ToSigned() const;
     
     // Timestamp特有方法
     Result<FileMeta> GetSnapshot() const;
