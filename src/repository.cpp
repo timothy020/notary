@@ -1111,27 +1111,27 @@ Error Repository::initializeTUFMetadata(const BaseRole& root,
         tufRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
         
         // 初始化Repo中的角色
-        auto err = tufRepo_->InitRoot(root, targets, snapshot, timestamp);
-        if (!err.ok()) {
-            return err;
+        auto rootResult = tufRepo_->InitRoot(root, targets, snapshot, timestamp);
+        if (!rootResult.ok()) {
+            return rootResult.error();
         }
         
         // 初始化Targets
-        err = tufRepo_->InitTargets();
-        if (!err.ok()) {
-            return err;
+        auto targetsResult = tufRepo_->InitTargets();
+        if (!targetsResult.ok()) {
+            return targetsResult.error();
         }
         
         // 初始化Snapshot
-        err = tufRepo_->InitSnapshot();
-        if (!err.ok()) {
-            return err;
+        auto snapshotResult = tufRepo_->InitSnapshot();
+        if (!snapshotResult.ok()) {
+            return snapshotResult.error();
         }
         
         // 初始化Timestamp
-        err = tufRepo_->InitTimestamp();
-        if (!err.ok()) {
-            return err;
+        auto timestampResult = tufRepo_->InitTimestamp();
+        if (!timestampResult.ok()) {
+            return timestampResult.error();
         }
         
         return Error();
