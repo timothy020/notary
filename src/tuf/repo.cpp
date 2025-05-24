@@ -272,15 +272,15 @@ json Targets::toJson() const {
     json j = Common.toJson();
     
     // 添加targets
-    json targets;
-    for (const auto& [name, meta] : Targets) {
-        targets[name] = meta.toJson();
+    json json;
+    for (const auto& [name, meta] : targets) {
+        json[name] = meta.toJson();
     }
-    j["targets"] = targets;
+    j["targets"] = json;
     
     // 添加delegations（如果有）
-    if (!Delegations.Keys.empty() || !Delegations.Roles.empty()) {
-        j["delegations"] = Delegations.toJson();
+    if (!delegations.Keys.empty() || !delegations.Roles.empty()) {
+        j["delegations"] = delegations.toJson();
     }
     
     return j;
@@ -294,7 +294,7 @@ void Targets::fromJson(const json& j) {
     }
     
     if (j.contains("delegations")) {
-        Delegations.fromJson(j.at("delegations"));
+        delegations.fromJson(j.at("delegations"));
     }
 }
 
@@ -513,15 +513,15 @@ bool SignedTargets::Deserialize(const std::vector<uint8_t>& data) {
 
 // SignedTargets 新方法实现
 FileMeta* SignedTargets::GetMeta(const std::string& path) {
-    auto it = Signed.Targets.find(path);
-    if (it != Signed.Targets.end()) {
+    auto it = Signed.targets.find(path);
+    if (it != Signed.targets.end()) {
         return &(it->second);
     }
     return nullptr;
 }
 
 void SignedTargets::AddTarget(const std::string& path, const FileMeta& meta) {
-    Signed.Targets[path] = meta;
+    Signed.targets[path] = meta;
     Dirty = true;
 }
 
@@ -985,7 +985,7 @@ Error Repo::AddTarget(const std::string& targetName, const std::vector<uint8_t>&
         return Error("Failed to create target meta: " + metaResult.error().what());
     }
     
-    targets->Signed.Targets[targetName] = metaResult.value();
+    targets->Signed.targets[targetName] = metaResult.value();
     targets->Dirty = true;
     return Error();
 }
@@ -996,7 +996,7 @@ Error Repo::RemoveTarget(const std::string& targetName, RoleName role) {
         return Error("Targets metadata not found for role");
     }
     
-    targets->Signed.Targets.erase(targetName);
+    targets->Signed.targets.erase(targetName);
     targets->Dirty = true;
     return Error();
 }
@@ -1013,7 +1013,7 @@ Error Repo::RemoveTargets(RoleName role, const std::vector<std::string>& targets
     }
     
     for (const auto& targetName : targets) {
-        targetsMetadata->Signed.Targets.erase(targetName);
+        targetsMetadata->Signed.targets.erase(targetName);
     }
     
     targetsMetadata->Dirty = true;
@@ -1210,11 +1210,11 @@ std::shared_ptr<SignedTargets> NewTargets() {
     newTargets->Signed.Common.Expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 365); // 1年过期
     
     // 初始化targets为空
-    newTargets->Signed.Targets.clear();
+    newTargets->Signed.targets.clear();
     
     // 初始化delegations为空
-    newTargets->Signed.Delegations.Keys.clear();
-    newTargets->Signed.Delegations.Roles.clear();
+    newTargets->Signed.delegations.Keys.clear();
+    newTargets->Signed.delegations.Roles.clear();
     
     // 初始化签名数组
     newTargets->Signatures.clear();

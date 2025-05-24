@@ -118,8 +118,8 @@ struct Root {
 // Targets元数据内容（对应Go的Targets结构体）
 struct Targets {
     SignedCommon Common;
-    std::map<std::string, FileMeta> Targets;  // Files类型：map[string]FileMeta
-    Delegations Delegations;  // 委托信息
+    std::map<std::string, FileMeta> targets;  // Files类型：map[string]FileMeta
+    Delegations delegations;  // 委托信息
     
     // JSON 序列化支持
     json toJson() const;
