@@ -1,4 +1,5 @@
 #include "notary/crypto/keys.hpp"
+#include "notary/utils/tools.hpp"
 #include <openssl/evp.h>
 #include <openssl/ec.h>
 #include <openssl/rsa.h>
