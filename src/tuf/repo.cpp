@@ -221,7 +221,7 @@ json Root::toJson() const {
     json keys;
     for (const auto& [keyId, key] : Keys) {
         json keyJson;
-        keyJson["keytype"] = "ecdsa"; // 简化处理
+        keyJson["keytype"] = "ecdsa"; // TODO: 需要根据实际的密钥类型进行设置
         keyJson["keyval"] = json::object();
         keyJson["keyval"]["public"] = base64Encode(key->Bytes());
         keys[keyId] = keyJson;

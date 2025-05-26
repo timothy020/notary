@@ -541,10 +541,24 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<PublicKey>>& rootK
         BIO_free_all(b64);
         
         // 从DER数据创建ECDSA公钥
+        /**
+         * DER (二进制数据)
+         * ↓
+         * d2i_EC_PUBKEY（反序列化）
+         * ↓
+         * EC_KEY*（OpenSSL对象）
+         * ↓
+         * i2d_EC_PUBKEY（再序列化）
+         * ↓
+         * vector<uint8_t> keyDer
+         * ↓
+         * crypto::ECDSAPublicKey(keyDer)
+         * ↓
+         * PublicKey 接口（适配）
+         */
         const unsigned char* p = derData.data();
         EC_KEY* ecKey = d2i_EC_PUBKEY(nullptr, &p, derData.size());
         if (ecKey) {
-            // 将EC_KEY转换为DER格式
             unsigned char* der = nullptr;
             int derLen = i2d_EC_PUBKEY(ecKey, &der);
             if (derLen > 0 && der) {
