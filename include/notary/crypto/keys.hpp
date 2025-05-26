@@ -6,7 +6,6 @@
 #include <map>
 #include <functional>
 #include "notary/utils/logger.hpp"
-#include "notary/utils/tools.hpp"
 
 namespace notary {
 namespace crypto {

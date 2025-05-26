@@ -13,7 +13,7 @@ namespace crypto {
 
 class CryptoService {
 public:
-    CryptoService() : defaultPassphrase_("changeme") {}
+    explicit CryptoService(std::shared_ptr<storage::GenericKeyStore> keyStore) : keyStore_(keyStore) {}
     
     // 设置默认密码
     void SetDefaultPassphrase(const std::string& passphrase) {
@@ -66,7 +66,7 @@ private:
 private:
     std::string defaultPassphrase_;
     
-    storage::KeyStore keyStore_;
+    std::shared_ptr<storage::GenericKeyStore> keyStore_;
 };
 
 } // namespace crypto
