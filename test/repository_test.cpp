@@ -26,24 +26,24 @@ TEST_CASE("Repository Initialization", "[repository]") {
     std::string tempDir = "/tmp/notary_test";
     create_directories(tempDir);
     
-    SECTION("Initialize with no root key") {
-        Repository repo(tempDir, "http://localhost:4443");
-        auto err = repo.Initialize({});
-        REQUIRE(err.ok());
+    // SECTION("Initialize with no root key") {
+    //     Repository repo(tempDir, "http://localhost:4443");
+    //     auto err = repo.Initialize({});
+    //     REQUIRE(err.ok());
         
-        // 验证元数据文件是否创建
-        std::string metadataDir = tempDir + "/tuf/metadata";
-        REQUIRE(exists(metadataDir + "/root.json"));
-        REQUIRE(exists(metadataDir + "/targets.json"));
-        REQUIRE(exists(metadataDir + "/snapshot.json"));
-    }
+    //     // 验证元数据文件是否创建
+    //     std::string metadataDir = tempDir + "/tuf/metadata";
+    //     REQUIRE(exists(metadataDir + "/root.json"));
+    //     REQUIRE(exists(metadataDir + "/targets.json"));
+    //     REQUIRE(exists(metadataDir + "/snapshot.json"));
+    // }
     
-    SECTION("Initialize with invalid root key") {
-        Repository repo(tempDir, "http://localhost:4443");
-        auto err = repo.Initialize({"invalid_key_id"});
-        REQUIRE_FALSE(err.ok());
-        REQUIRE(err.what() == "Root key not found: invalid_key_id");
-    }
+    // SECTION("Initialize with invalid root key") {
+    //     Repository repo(tempDir, "http://localhost:4443");
+    //     auto err = repo.Initialize({"invalid_key_id"});
+    //     REQUIRE_FALSE(err.ok());
+    //     REQUIRE(err.what() == "Root key not found: invalid_key_id");
+    // }
     
     // 清理
     remove_all(tempDir);

@@ -1,9 +1,12 @@
 #include "notary/tuf/repo.hpp"
+#include "notary/utils/tools.hpp"
+#include "notary/crypto/sign.hpp"
 #include <stdexcept>
 #include <algorithm>
 #include <set>
 #include <sstream>
 #include <iomanip>
+#include <variant>
 #include <openssl/evp.h>
 #include <openssl/bio.h>
 #include <openssl/ec.h>
@@ -14,25 +17,6 @@
 
 namespace notary {
 namespace tuf {
-
-// 辅助函数实现
-std::string roleNameToString(RoleName role) {
-    switch (role) {
-        case RoleName::RootRole: return "root";
-        case RoleName::TargetsRole: return "targets";
-        case RoleName::SnapshotRole: return "snapshot";
-        case RoleName::TimestampRole: return "timestamp";
-        default: return "unknown";
-    }
-}
-
-RoleName stringToRoleName(const std::string& roleStr) {
-    if (roleStr == "root") return RoleName::RootRole;
-    if (roleStr == "targets") return RoleName::TargetsRole;
-    if (roleStr == "snapshot") return RoleName::SnapshotRole;
-    if (roleStr == "timestamp") return RoleName::TimestampRole;
-    return RoleName::RootRole; // 默认值
-}
 
 std::string timeToISO8601(const std::chrono::time_point<std::chrono::system_clock>& time) {
     auto time_t = std::chrono::system_clock::to_time_t(time);
@@ -48,57 +32,20 @@ std::chrono::time_point<std::chrono::system_clock> iso8601ToTime(const std::stri
     return std::chrono::system_clock::from_time_t(std::mktime(&tm));
 }
 
-// 实现base64编码函数
-std::string base64Encode(const std::vector<uint8_t>& data) {
-    BIO* b64 = BIO_new(BIO_f_base64());
-    BIO* mem = BIO_new(BIO_s_mem());
-    BIO_push(b64, mem);
-    BIO_write(b64, data.data(), data.size());
-    BIO_flush(b64);
-    
-    BUF_MEM* bptr;
-    BIO_get_mem_ptr(b64, &bptr);
-    std::string result(bptr->data, bptr->length);
-    
-    // 移除可能存在的换行符
-    result.erase(std::remove(result.begin(), result.end(), '\n'), result.end());
-    
-    BIO_free_all(b64);
-    return result;
-}
-
-
-// Base64解码函数
-std::vector<uint8_t> base64Decode(const std::string& data) {
-    BIO* b64 = BIO_new(BIO_f_base64());
-    BIO* mem = BIO_new_mem_buf(data.data(), data.size());
-    BIO_push(b64, mem);
-    
-    std::vector<uint8_t> result(data.size());
-    int decodedSize = BIO_read(b64, result.data(), data.size());
-    if (decodedSize > 0) {
-        result.resize(decodedSize);
-    } else {
-        result.clear();
-    }
-    
-    BIO_free_all(b64);
-    return result;
-}
 
 // Signature 实现
 json Signature::toJson() const {
     json j;
     j["keyid"] = KeyID;
     j["method"] = Method;
-    j["sig"] = base64Encode(Sig);
+    j["sig"] = utils::Base64Encode(Sig);
     return j;
 }
 
 void Signature::fromJson(const json& j) {
     KeyID = j.at("keyid").get<std::string>();
     Method = j.at("method").get<std::string>();
-    Sig = base64Decode(j.at("sig").get<std::string>());
+    Sig = utils::Base64Decode(j.at("sig").get<std::string>());
 }
 
 // SignedCommon 实现
@@ -123,9 +70,9 @@ json FileMeta::toJson() const {
     
     json hashes;
     for (const auto& [algo, hash] : Hashes) {
-        hashes[algo] = base64Encode(hash);
+        hashes[algo] = hash;
     }
-    j["hashes"] = hashes;
+    j["hashes"] = utils::Base64Encode(hashes);
     
     if (!Custom.is_null()) {
         j["custom"] = Custom;
@@ -139,7 +86,7 @@ void FileMeta::fromJson(const json& j) {
     
     if (j.contains("hashes")) {
         for (const auto& [algo, hashStr] : j.at("hashes").items()) {
-            Hashes[algo] = base64Decode(hashStr.get<std::string>());
+            Hashes[algo] = utils::Base64Decode(hashStr.get<std::string>());
         }
     }
     
@@ -155,7 +102,7 @@ bool FileMeta::equals(const FileMeta& other) const {
 // DelegationRole 实现
 json DelegationRole::toJson() const {
     json j;
-    j["name"] = roleNameToString(Name);
+    j["name"] = roleToString(Name);
     j["threshold"] = BaseRoleInfo.Threshold();
     
     json keyids = json::array();
@@ -172,7 +119,7 @@ json DelegationRole::toJson() const {
 }
 
 void DelegationRole::fromJson(const json& j) {
-    Name = stringToRoleName(j.at("name").get<std::string>());
+    Name = stringToRole(j.at("name").get<std::string>());
     // 注意：这里需要从外部设置BaseRoleInfo，因为需要密钥信息
     if (j.contains("paths")) {
         Paths = j.at("paths").get<std::vector<std::string>>();
@@ -188,7 +135,7 @@ json Delegations::toJson() const {
         json keyJson;
         keyJson["keytype"] = "ecdsa"; // 简化处理
         keyJson["keyval"] = json::object();
-        keyJson["keyval"]["public"] = base64Encode(key->Bytes());
+        keyJson["keyval"]["public"] = utils::Base64Encode(key->Public());
         keys[keyId] = keyJson;
     }
     j["keys"] = keys;
@@ -221,9 +168,9 @@ json Root::toJson() const {
     json keys;
     for (const auto& [keyId, key] : Keys) {
         json keyJson;
-        keyJson["keytype"] = "ecdsa"; // TODO: 需要根据实际的密钥类型进行设置
+        keyJson["keytype"] = key->Algorithm();
         keyJson["keyval"] = json::object();
-        keyJson["keyval"]["public"] = base64Encode(key->Bytes());
+        keyJson["keyval"]["public"] = utils::Base64Encode(key->Public());
         keys[keyId] = keyJson;
     }
     j["keys"] = keys;
@@ -240,7 +187,7 @@ json Root::toJson() const {
         }
         roleJson["keyids"] = keyids;
         
-        roles[roleNameToString(roleName)] = roleJson;
+        roles[roleToString(roleName)] = roleJson;
     }
     j["roles"] = roles;
     
@@ -425,7 +372,7 @@ Result<BaseRole> SignedRoot::BuildBaseRole(RoleName roleName) const {
     
     // Get all public keys for the base role from TUF metadata
     const auto& role = it->second;
-    std::vector<std::shared_ptr<PublicKey>> pubKeys;
+    std::vector<std::shared_ptr<crypto::PublicKey>> pubKeys;
     
     for (const auto& key : role.Keys()) {
         std::string keyID = key->ID();
@@ -610,21 +557,21 @@ bool SignedSnapshot::Deserialize(const std::vector<uint8_t>& data) {
 
 // SignedSnapshot 新方法实现
 void SignedSnapshot::AddMeta(RoleName role, const FileMeta& meta) {
-    Signed.Meta[roleNameToString(role) + ".json"] = meta;
+    Signed.Meta[roleToString(role) + ".json"] = meta;
     Dirty = true;
 }
 
 Result<FileMeta> SignedSnapshot::GetMeta(RoleName role) const {
-    std::string roleName = roleNameToString(role) + ".json";
+    std::string roleName = roleToString(role) + ".json";
     auto it = Signed.Meta.find(roleName);
     if (it != Signed.Meta.end()) {
         return Result<FileMeta>(it->second);
     }
-    return Result<FileMeta>(Error("Meta not found for role: " + roleNameToString(role)));
+    return Result<FileMeta>(Error("Meta not found for role: " + roleToString(role)));
 }
 
 void SignedSnapshot::DeleteMeta(RoleName role) {
-    std::string roleName = roleNameToString(role) + ".json";
+    std::string roleName = roleToString(role) + ".json";
     auto it = Signed.Meta.find(roleName);
     if (it != Signed.Meta.end()) {
         Signed.Meta.erase(it);
@@ -747,7 +694,7 @@ void Repo::SetTargets(std::shared_ptr<SignedTargets> targets, RoleName role) {
 Result<std::shared_ptr<SignedRoot>> Repo::InitRoot(const BaseRole& root, const BaseRole& targets, 
                     const BaseRole& snapshot, const BaseRole& timestamp) {
     // 收集所有密钥
-    std::map<std::string, std::shared_ptr<PublicKey>> keys;
+    std::map<std::string, std::shared_ptr<crypto::PublicKey>> keys;
     std::map<RoleName, BaseRole> roles;
     
     auto addKeysFromRole = [&](const BaseRole& role, RoleName roleName) {
@@ -773,9 +720,9 @@ Result<std::shared_ptr<SignedRoot>> Repo::InitRoot(const BaseRole& root, const B
 
 Result<std::shared_ptr<SignedTargets>> Repo::InitTargets(RoleName role) {
     // 角色验证：检查是否是有效的targets角色
-    if (!IsValidTargetsRole(role)) {
+    if (!IsDelegation(role) && role != RoleName::TargetsRole) {
         return Result<std::shared_ptr<SignedTargets>>(
-            Error("Role is not a valid targets role name: " + roleNameToString(role))
+            Error("Role is not a valid targets role name: " + roleToString(role))
         );
     }
     
@@ -842,7 +789,7 @@ Result<std::shared_ptr<SignedTimestamp>> Repo::InitTimestamp() {
 }
 
 // 密钥管理方法实现
-Error Repo::AddBaseKeys(RoleName role, const std::vector<std::shared_ptr<PublicKey>>& keys) {
+Error Repo::AddBaseKeys(RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys) {
     if (!root_) {
         return Error("Root metadata not loaded");
     }
@@ -859,7 +806,7 @@ Error Repo::AddBaseKeys(RoleName role, const std::vector<std::shared_ptr<PublicK
     return Error();
 }
 
-Error Repo::ReplaceBaseKeys(RoleName role, const std::vector<std::shared_ptr<PublicKey>>& keys) {
+Error Repo::ReplaceBaseKeys(RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys) {
     if (!root_) {
         return Error("Root metadata not loaded");
     }
@@ -889,7 +836,7 @@ Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs
     auto& roleKeys = root_->Signed.Roles[role].Keys();
     roleKeys.erase(
         std::remove_if(roleKeys.begin(), roleKeys.end(),
-            [&keyIDs](const std::shared_ptr<PublicKey>& key) {
+            [&keyIDs](const std::shared_ptr<crypto::PublicKey>& key) {
                 return std::find(keyIDs.begin(), keyIDs.end(), key->ID()) != keyIDs.end();
             }),
         roleKeys.end()
@@ -967,43 +914,98 @@ Error Repo::VerifyCanSign(RoleName roleName) const {
     return Error("No signing keys available for role");
 }
 
-// 目标管理方法实现
-Error Repo::AddTarget(const std::string& targetName, const std::vector<uint8_t>& targetData, RoleName role) {
-    auto targets = GetTargets(role);
-    if (!targets) {
-        // 如果目标元数据不存在，则创建
-        auto result = InitTargets(role);
-        if (!result.ok()) {
-            return result.error();
-        }
-        targets = GetTargets(role);
-    }
+// // 目标管理方法实现
+// Error Repo::AddTarget(const std::string& targetName, const std::vector<uint8_t>& targetData, RoleName role) {
+//     auto targets = GetTargets(role);
+//     if (!targets) {
+//         // 如果目标元数据不存在，则创建
+//         auto result = InitTargets(role);
+//         if (!result.ok()) {
+//             return result.error();
+//         }
+//         targets = GetTargets(role);
+//     }
     
-    // 使用NewFileMeta函数创建FileMeta对象并计算真正的哈希值
-    auto metaResult = NewFileMeta(targetData, {"sha256", "sha512"});
-    if (!metaResult.ok()) {
-        return Error("Failed to create target meta: " + metaResult.error().what());
-    }
+//     // 使用NewFileMeta函数创建FileMeta对象并计算真正的哈希值
+//     auto metaResult = NewFileMeta(targetData, {"sha256", "sha512"});
+//     if (!metaResult.ok()) {
+//         return Error("Failed to create target meta: " + metaResult.error().what());
+//     }
     
-    targets->Signed.targets[targetName] = metaResult.value();
-    targets->Dirty = true;
-    return Error();
-}
+//     targets->Signed.targets[targetName] = metaResult.value();
+//     targets->Dirty = true;
+//     return Error();
+// }
 
-Error Repo::RemoveTarget(const std::string& targetName, RoleName role) {
-    auto targets = GetTargets(role);
-    if (!targets) {
-        return Error("Targets metadata not found for role");
-    }
+// Error Repo::RemoveTarget(const std::string& targetName, RoleName role) {
+//     auto targets = GetTargets(role);
+//     if (!targets) {
+//         return Error("Targets metadata not found for role");
+//     }
     
-    targets->Signed.targets.erase(targetName);
-    targets->Dirty = true;
-    return Error();
-}
+//     targets->Signed.targets.erase(targetName);
+//     targets->Dirty = true;
+//     return Error();
+// }
 
 Error Repo::AddTargets(RoleName role, const std::map<std::string, FileMeta>& targets) {
-    // TODO: 实现批量添加目标
-    return Error("AddTargets not implemented");
+    // 验证是否可以签名该角色
+    auto cantSignErr = VerifyCanSign(role);
+    bool needSign = false;
+    
+    // 检查角色的元数据是否存在
+    auto targetsMetadata = GetTargets(role);
+    if (!targetsMetadata) {
+        // 如果不存在则创建
+        auto initResult = InitTargets(role);
+        if (!initResult.ok()) {
+            return initResult.error();
+        }
+        targetsMetadata = GetTargets(role);
+    }
+    
+    std::map<std::string, FileMeta> addedTargets;
+    
+    // 定义添加目标的访问者函数
+    auto addTargetVisitor = [&](const std::string& targetPath, const FileMeta& targetMeta) -> WalkVisitorFunc {
+        return [&, targetPath, targetMeta](std::shared_ptr<SignedTargets> tgt, const DelegationRole& validRole) -> WalkResult {
+            // 检查目标是否已经存在且相同
+            auto existingMeta = tgt->GetMeta(targetPath);
+            if (existingMeta && existingMeta->equals(targetMeta)) {
+                // 目标已存在且相同，添加到成功列表
+                addedTargets[targetPath] = targetMeta;
+                return StopWalk{}; // StopWalk equivalent
+            }
+            
+            needSign = true;
+            if (cantSignErr.ok()) {
+                // 添加目标到元数据
+                tgt->AddTarget(targetPath, targetMeta);
+                // 添加到成功列表
+                addedTargets[targetPath] = targetMeta;
+            }
+            return StopWalk{}; // StopWalk equivalent
+        };
+    };
+    
+    // 遍历所有目标并添加
+    for (const auto& [path, target] : targets) {
+        auto walkErr = WalkTargets(path, role, addTargetVisitor(path, target));
+        if (!walkErr.ok()) {
+            return walkErr;
+        }
+        
+        if (needSign && !cantSignErr.ok()) {
+            return cantSignErr;
+        }
+    }
+    
+    // 检查是否所有目标都添加成功
+    if (addedTargets.size() != targets.size()) {
+        return Error("Could not add all targets");
+    }
+    
+    return Error(); // 成功
 }
 
 Error Repo::RemoveTargets(RoleName role, const std::vector<std::string>& targets) {
@@ -1034,12 +1036,68 @@ std::vector<DelegationRole> Repo::TargetDelegations(RoleName role, const std::st
 // 遍历方法实现
 Error Repo::WalkTargets(const std::string& targetPath, RoleName rolePath, 
                        WalkVisitorFunc visitTargets, const std::vector<RoleName>& skipRoles) {
-    // TODO: 实现目标遍历逻辑
-    return Error("WalkTargets not implemented");
+    // 从基础targets角色开始，隐式具有""目标路径
+    auto targetsRoleResult = GetBaseRole(RoleName::TargetsRole);
+    if (!targetsRoleResult.ok()) {
+        return targetsRoleResult.error();
+    }
+    
+    // 将targets角色作为委托角色处理，具有空路径
+    std::vector<DelegationRole> roles;
+    DelegationRole baseTargetsRole;
+    baseTargetsRole.BaseRoleInfo = targetsRoleResult.value();
+    baseTargetsRole.Name = RoleName::TargetsRole;
+    baseTargetsRole.Paths = {""};
+    roles.push_back(baseTargetsRole);
+    
+    while (!roles.empty()) {
+        auto role = roles.front();
+        roles.erase(roles.begin());
+        
+        // 检查角色元数据
+        auto signedTgt = GetTargets(role.Name);
+        if (!signedTgt) {
+            // 角色元数据在repo中不存在，继续下一个
+            continue;
+        }
+        
+        // 检查是否在所需角色子树的前缀，如果是则添加其委托角色子项并继续遍历
+        std::string rolePathStr = roleToString(rolePath);
+        std::string roleNameStr = roleToString(role.Name);
+        if (rolePathStr.find(roleNameStr + "/") == 0) {
+            auto validDelegations = signedTgt->GetValidDelegations(role);
+            roles.insert(roles.end(), validDelegations.begin(), validDelegations.end());
+            continue;
+        }
+        
+        // 确定是否访问此角色：
+        // 如果路径对指定的targetPath有效且角色为空或是子树中的路径
+        // 同时检查是否选择在此遍历中跳过访问此角色
+        bool shouldSkip = std::find(skipRoles.begin(), skipRoles.end(), role.Name) != skipRoles.end();
+        
+        if (isValidPath(targetPath, role) && isAncestorRole(role.Name, rolePath) && !shouldSkip) {
+            // 如果有匹配的路径或角色名称，访问此目标并确定是否继续遍历
+            auto result = visitTargets(signedTgt, role);
+            
+            if (std::holds_alternative<StopWalk>(result)) {
+                // 如果访问者函数发出停止信号，返回nil完成遍历
+                return Error();
+            } else if (std::holds_alternative<Error>(result)) {
+                // 传播访问者的任何错误
+                return std::get<Error>(result);
+            } else if (std::holds_alternative<std::monostate>(result)) {
+                // 如果访问者函数发出继续信号，将此角色的委托添加到遍历中
+                auto validDelegations = signedTgt->GetValidDelegations(role);
+                roles.insert(roles.end(), validDelegations.begin(), validDelegations.end());
+            }
+        }
+    }
+    
+    return Error();
 }
 
 // 委托管理方法实现
-Error Repo::UpdateDelegationKeys(RoleName roleName, const std::vector<std::shared_ptr<PublicKey>>& addKeys, 
+Error Repo::UpdateDelegationKeys(RoleName roleName, const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys, 
                                  const std::vector<std::string>& removeKeys, int newThreshold) {
     // TODO: 实现委托密钥更新
     return Error("UpdateDelegationKeys not implemented");
@@ -1067,7 +1125,20 @@ Error Repo::UpdateSnapshot(RoleName role, const std::shared_ptr<Signed>& s) {
         return Error("Snapshot metadata not loaded");
     }
     
-    // TODO: 实现快照更新逻辑
+    // 序列化Signed对象
+    auto jsonData = s->Serialize();
+    if (jsonData.empty()) {
+        return Error("Failed to serialize signed data");
+    }
+    
+    // 创建FileMeta
+    auto metaResult = NewFileMeta(jsonData, {"sha256", "sha512"});
+    if (!metaResult.ok()) {
+        return Error("Failed to create file meta: " + metaResult.error().what());
+    }
+    
+    // 更新snapshot的meta
+    snapshot_->Signed.Meta[roleToString(role) + ".json"] = metaResult.value();
     snapshot_->Dirty = true;
     return Error();
 }
@@ -1077,7 +1148,20 @@ Error Repo::UpdateTimestamp(const std::shared_ptr<Signed>& s) {
         return Error("Timestamp metadata not loaded");
     }
     
-    // TODO: 实现时间戳更新逻辑
+    // 序列化Signed对象
+    auto jsonData = s->Serialize();
+    if (jsonData.empty()) {
+        return Error("Failed to serialize signed data");
+    }
+    
+    // 创建FileMeta
+    auto metaResult = NewFileMeta(jsonData, {"sha256", "sha512"});
+    if (!metaResult.ok()) {
+        return Error("Failed to create file meta: " + metaResult.error().what());
+    }
+    
+    // 更新timestamp的meta（固定为snapshot.json）
+    timestamp_->Signed.Meta["snapshot.json"] = metaResult.value();
     timestamp_->Dirty = true;
     return Error();
 }
@@ -1088,18 +1172,100 @@ Result<std::shared_ptr<Signed>> Repo::SignRoot(const std::chrono::time_point<std
         return Result<std::shared_ptr<Signed>>(Error("Root metadata not loaded"));
     }
     
-    // TODO: 实现root签名逻辑
-    return Result<std::shared_ptr<Signed>>(Error("SignRoot not implemented"));
+    // 复制当前Root对象，避免直接修改
+    auto rootBytes = root_->Serialize();
+    if (rootBytes.empty()) {
+        return Result<std::shared_ptr<Signed>>(Error("Failed to serialize current root"));
+    }
+    
+    auto tempRoot = std::make_shared<SignedRoot>();
+    if (!tempRoot->Deserialize(rootBytes)) {
+        return Result<std::shared_ptr<Signed>>(Error("Failed to deserialize root copy"));
+    }
+    
+    // 获取当前root role的密钥信息
+    auto currRootResult = GetBaseRole(RoleName::RootRole);
+    if (!currRootResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(currRootResult.error());
+    }
+    const auto& currRoot = currRootResult.value();
+    
+    std::vector<BaseRole> rolesToSignWith;
+    
+    // 检查是否为密钥轮换
+    // 如果root role的密钥集或threshold发生变化，需要使用旧密钥对新root再签一遍
+    if (!originalRootRole_.Equals(currRoot)) {
+        rolesToSignWith.push_back(originalRootRole_);
+    }
+    
+    // 更新过期时间和版本号
+    tempRoot->Signed.Common.Expires = expires;
+    tempRoot->Signed.Common.Version++;
+    rolesToSignWith.push_back(currRoot);
+    
+    // 转换为Signed对象进行签名
+    auto signedResult = tempRoot->ToSigned();
+    if (!signedResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signedResult.error());
+    }
+    
+    // 进行签名
+    auto signResult = sign(signedResult.value(), rolesToSignWith, {});
+    if (!signResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signResult.error());
+    }
+    
+    // 更新root对象
+    root_ = tempRoot;
+    root_->Signatures = signResult.value()->Signatures;
+    originalRootRole_ = currRoot;
+    
+    return signResult;
 }
 
 Result<std::shared_ptr<Signed>> Repo::SignTargets(RoleName role, const std::chrono::time_point<std::chrono::system_clock>& expires) {
     auto targets = GetTargets(role);
     if (!targets) {
-        return Result<std::shared_ptr<Signed>>(Error("Targets metadata not found for role"));
+        return Result<std::shared_ptr<Signed>>(Error("SignTargets called with non-existent targets role"));
     }
     
-    // TODO: 实现targets签名逻辑
-    return Result<std::shared_ptr<Signed>>(Error("SignTargets not implemented"));
+    // 更新过期时间和版本号
+    targets->Signed.Common.Expires = expires;
+    targets->Signed.Common.Version++;
+    
+    // 转换为Signed对象
+    auto signedResult = targets->ToSigned();
+    if (!signedResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signedResult.error());
+    }
+    
+    // 获取角色信息
+    BaseRole targetsRole;
+    Error err;
+    if (role == RoleName::TargetsRole) {
+        auto roleResult = GetBaseRole(role);
+        if (!roleResult.ok()) {
+            return Result<std::shared_ptr<Signed>>(roleResult.error());
+        }
+        targetsRole = roleResult.value();
+    } else {
+        // 委托角色处理
+        auto delegationResult = GetDelegationRole(role);
+        if (!delegationResult.ok()) {
+            return Result<std::shared_ptr<Signed>>(delegationResult.error());
+        }
+        targetsRole = delegationResult.value().BaseRoleInfo;
+    }
+    
+    // 进行签名
+    auto signResult = sign(signedResult.value(), {targetsRole}, {});
+    if (!signResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signResult.error());
+    }
+    
+    // 更新签名
+    targets->Signatures = signResult.value()->Signatures;
+    return signResult;
 }
 
 Result<std::shared_ptr<Signed>> Repo::SignSnapshot(const std::chrono::time_point<std::chrono::system_clock>& expires) {
@@ -1107,8 +1273,57 @@ Result<std::shared_ptr<Signed>> Repo::SignSnapshot(const std::chrono::time_point
         return Result<std::shared_ptr<Signed>>(Error("Snapshot metadata not loaded"));
     }
     
-    // TODO: 实现snapshot签名逻辑
-    return Result<std::shared_ptr<Signed>>(Error("SignSnapshot not implemented"));
+    // 更新snapshot基于当前的root和targets
+    auto signedRootResult = root_->ToSigned();
+    if (!signedRootResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signedRootResult.error());
+    }
+    
+    auto updateErr = UpdateSnapshot(RoleName::RootRole, signedRootResult.value());
+    if (!updateErr.ok()) {
+        return Result<std::shared_ptr<Signed>>(updateErr);
+    }
+    root_->Dirty = false; // root dirty until changes captured in snapshot
+    
+    // 更新所有targets
+    for (auto& [role, targets] : targets_) {
+        auto signedTargetsResult = targets->ToSigned();
+        if (!signedTargetsResult.ok()) {
+            return Result<std::shared_ptr<Signed>>(signedTargetsResult.error());
+        }
+        
+        auto updateErr = UpdateSnapshot(role, signedTargetsResult.value());
+        if (!updateErr.ok()) {
+            return Result<std::shared_ptr<Signed>>(updateErr);
+        }
+        targets->Dirty = false;
+    }
+    
+    // 更新过期时间和版本号
+    snapshot_->Signed.Common.Expires = expires;
+    snapshot_->Signed.Common.Version++;
+    
+    // 转换为Signed对象
+    auto signedResult = snapshot_->ToSigned();
+    if (!signedResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signedResult.error());
+    }
+    
+    // 获取snapshot角色
+    auto snapshotRoleResult = GetBaseRole(RoleName::SnapshotRole);
+    if (!snapshotRoleResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(snapshotRoleResult.error());
+    }
+    
+    // 进行签名
+    auto signResult = sign(signedResult.value(), {snapshotRoleResult.value()}, {});
+    if (!signResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signResult.error());
+    }
+    
+    // 更新签名
+    snapshot_->Signatures = signResult.value()->Signatures;
+    return signResult;
 }
 
 Result<std::shared_ptr<Signed>> Repo::SignTimestamp(const std::chrono::time_point<std::chrono::system_clock>& expires) {
@@ -1116,8 +1331,43 @@ Result<std::shared_ptr<Signed>> Repo::SignTimestamp(const std::chrono::time_poin
         return Result<std::shared_ptr<Signed>>(Error("Timestamp metadata not loaded"));
     }
     
-    // TODO: 实现timestamp签名逻辑
-    return Result<std::shared_ptr<Signed>>(Error("SignTimestamp not implemented"));
+    // 更新timestamp基于当前的snapshot
+    auto signedSnapshotResult = snapshot_->ToSigned();
+    if (!signedSnapshotResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signedSnapshotResult.error());
+    }
+    
+    auto updateErr = UpdateTimestamp(signedSnapshotResult.value());
+    if (!updateErr.ok()) {
+        return Result<std::shared_ptr<Signed>>(updateErr);
+    }
+    
+    // 更新过期时间和版本号
+    timestamp_->Signed.Common.Expires = expires;
+    timestamp_->Signed.Common.Version++;
+    
+    // 转换为Signed对象
+    auto signedResult = timestamp_->ToSigned();
+    if (!signedResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signedResult.error());
+    }
+    
+    // 获取timestamp角色
+    auto timestampRoleResult = GetBaseRole(RoleName::TimestampRole);
+    if (!timestampRoleResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(timestampRoleResult.error());
+    }
+    
+    // 进行签名
+    auto signResult = sign(signedResult.value(), {timestampRoleResult.value()}, {});
+    if (!signResult.ok()) {
+        return Result<std::shared_ptr<Signed>>(signResult.error());
+    }
+    
+    // 更新签名
+    timestamp_->Signatures = signResult.value()->Signatures;
+    snapshot_->Dirty = false; // snapshot is dirty until changes have been captured in timestamp
+    return signResult;
 }
 
 // 私有方法实现
@@ -1145,9 +1395,37 @@ void Repo::markRoleDirty(RoleName role) {
 
 Result<std::shared_ptr<Signed>> Repo::sign(std::shared_ptr<Signed> signedData, 
                                           const std::vector<BaseRole>& roles, 
-                                          const std::vector<std::shared_ptr<PublicKey>>& optionalKeys) {
-    // TODO: 实现通用签名逻辑
-    return Result<std::shared_ptr<Signed>>(Error("sign method not implemented"));
+                                          const std::vector<std::shared_ptr<crypto::PublicKey>>& optionalKeys) {
+    if (!signedData) {
+        return Result<std::shared_ptr<Signed>>(Error("Signed data is null"));
+    }
+    
+    // 构建validKeys列表，包含optionalKeys
+    std::vector<std::shared_ptr<crypto::PublicKey>> validKeys = optionalKeys;
+    
+    // 为每个角色进行签名
+    for (const auto& role : roles) {
+        // 获取当前role应使用的公钥（从role定义中获取）
+        auto roleKeys = role.Keys();
+        
+        // 将roleKeys添加到validKeys中
+        validKeys.insert(validKeys.end(), roleKeys.begin(), roleKeys.end());
+        
+        // 调用crypto::Sign函数进行签名
+        // 将一组私钥应用到待签名的元数据上，并确保满足最小签名数要求，同时清理掉无效签名
+        auto signError = crypto::Sign(cryptoService_, signedData, roleKeys, role.Threshold(), validKeys);
+        if (!signError.ok()) {
+            return Result<std::shared_ptr<Signed>>(signError);
+        }
+    }
+    
+    // 尝试用optionalKeys签名，但即使失败也不报错
+    // 额外签名（兼容性）
+    // - 尝试用optionalKeys签名，但即使失败也不报错
+    // - 典型用途：密钥轮换过程旧key仍需签名一次，兼容旧客户端读取
+    crypto::Sign(cryptoService_, signedData, optionalKeys, 0, validKeys);
+    
+    return Result<std::shared_ptr<Signed>>(signedData);
 }
 
 bool Repo::isValidPath(const std::string& candidatePath, const DelegationRole& delgRole) const {
@@ -1155,25 +1433,74 @@ bool Repo::isValidPath(const std::string& candidatePath, const DelegationRole& d
 }
 
 bool Repo::isAncestorRole(RoleName candidateChild, RoleName candidateAncestor) const {
-    // TODO: 实现角色层次检查
-    // 需要根据具体的角色命名规则来实现
-    return true; // 简化实现
+    std::string childStr = roleToString(candidateChild);
+    std::string ancestorStr = roleToString(candidateAncestor);
+    
+    // 如果ancestor为空，或者相等，或者child是ancestor的子角色
+    return ancestorStr.empty() || 
+           candidateAncestor == candidateChild || 
+           childStr.find(ancestorStr + "/") == 0;
 }
 
 // 角色验证函数实现
 bool IsDelegation(RoleName role) {
-    // 在这个简化版本中，我们只有基础角色，没有委托角色
-    // 委托角色通常以 "targets/" 开头，但我们的枚举只包含基础角色
-    // 在完整实现中，这里需要检查角色名称是否以 "targets/" 开头
-    return false; // 目前简化实现，没有委托角色
+    std::string strRole = roleToString(role);
+    std::string targetsBase = roleToString(RoleName::TargetsRole) + "/";
+    
+    // 检查是否以"targets/"开头
+    if (strRole.find(targetsBase) != 0) {
+        return false;
+    }
+    
+    // 检查字符是否在白名单中 (对应Go的delegationRegexp.MatchString)
+    // Go的正则表达式: "^[-a-z0-9_/]+$"
+    for (char c : strRole) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '/')) {
+            return false;
+        }
+    }
+    
+    // 限制完整角色字符串长度为255字符 (对应Go的len(role) < 256)
+    if (strRole.length() >= 256) {
+        return false;
+    }
+    
+    // 检查路径是否干净 (对应Go的path.Clean(strRole) == strRole)
+    // 移除 ., .., 多余的斜杠和尾随斜杠
+    std::string path = utils::cleanPath(strRole);
+    if (path != strRole) {
+        return false;
+    }
+    
+    return true;
 }
 
-bool IsValidTargetsRole(RoleName role) {
-    return IsDelegation(role) || role == RoleName::TargetsRole;
+bool IsWildDelegation(RoleName role) {
+    std::string strRole = roleToString(role);
+    
+    // 检查路径是否干净 (对应Go的path.Clean(role.String()) != role.String())
+    if (utils::cleanPath(strRole) != strRole) {
+        return false;
+    }
+    
+    // 获取父角色 (对应Go的role.Parent())
+    RoleName base = utils::getParentRole(role);
+    
+    // 检查父角色是否是委托角色或者是CanonicalTargetsRole
+    if (!(IsDelegation(base) || base == RoleName::TargetsRole)) {
+        return false;
+    }
+    
+    // 检查是否以"/*"结尾 (对应Go的role[len(role)-2:] == "/*")
+    if (strRole.length() < 2) {
+        return false;
+    }
+    
+    return strRole.substr(strRole.length() - 2) == "/*";
 }
 
 // TUF对象创建辅助函数实现
-std::shared_ptr<SignedRoot> NewRoot(const std::map<std::string, std::shared_ptr<PublicKey>>& keys,
+std::shared_ptr<SignedRoot> NewRoot(const std::map<std::string, std::shared_ptr<crypto::PublicKey>>& keys,
                                    const std::map<RoleName, BaseRole>& roles, 
                                    bool consistent) {
     auto newRoot = std::make_shared<SignedRoot>();

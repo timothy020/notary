@@ -123,7 +123,7 @@ std::unique_ptr<GenericKeyStore> GenericKeyStore::NewKeyFileStore(
     const std::string& baseDir, 
     PassRetriever passRetriever) {
     
-    auto storage = std::make_unique<FileSystemStorage>(baseDir);
+    auto storage = std::make_unique<FileSystemStorage>(baseDir, ".key");
     return std::make_unique<GenericKeyStore>(std::move(storage), passRetriever);
 }
 

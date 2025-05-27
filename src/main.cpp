@@ -150,8 +150,7 @@ int main(int argc, char** argv) {
             }
             
             // 2. 创建仓库工厂并获取仓库实例
-            Repository repo(trustDir, serverURL);
-            repo.SetGUN(gun);
+            Repository repo(gun, trustDir, serverURL);
             repo.SetPassphrase(password); // 设置密码
             
             // 3. 导入根密钥
@@ -234,8 +233,7 @@ int main(int argc, char** argv) {
             }
             
             // 2. 创建仓库工厂并获取仓库实例
-            Repository repo(trustDir, serverURL);
-            repo.SetGUN(gun);
+            Repository repo(gun, trustDir, serverURL);
             repo.SetPassphrase(password); // 设置密码
             
             // 3. 加载自定义数据（如果有）
@@ -307,8 +305,7 @@ int main(int argc, char** argv) {
             }
             
             // 2. 创建仓库工厂并获取仓库实例
-            Repository repo(trustDir, serverURL);
-            repo.SetGUN(gun);
+            Repository repo(gun, trustDir, serverURL);
             repo.SetPassphrase(password); // 设置密码
             
             // 3. 发布更改

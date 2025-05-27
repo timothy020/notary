@@ -132,6 +132,9 @@ std::string Base64Encode(const std::vector<uint8_t>& data) {
 
     std::string result(bufferPtr->data, bufferPtr->length);
     BIO_free_all(bio);
+
+    // 移除可能存在的换行符
+    result.erase(std::remove(result.begin(), result.end(), '\n'), result.end());
     return result;
 }
 
@@ -186,7 +189,7 @@ std::string ConvertPrivateKeyToPKCS8(
     std::shared_ptr<crypto::PrivateKey> privKey,                           // 私钥（EVP 封装）
     const std::string& role,                 // 角色信息
     const std::string& gun,                  // GUN
-    const std::string& passphrase = ""       // 加密密码（为空表示不加密）
+    const std::string& passphrase       // 加密密码（为空表示不加密）
 ) {
 
     EVP_PKEY* pkey = ConvertPrivateKeyToEVPKey(privKey);
@@ -244,7 +247,7 @@ std::string ConvertPrivateKeyToPKCS8(
 // 从PEM数据中提取私钥属性（角色和GUN）
 std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
     const std::vector<uint8_t>& pemBytes, 
-    bool fips = false) {
+    bool fips) {
     
     std::string pemStr(pemBytes.begin(), pemBytes.end());
     
@@ -578,5 +581,65 @@ Result<std::shared_ptr<crypto::PrivateKey>> convertEVPKeyToTufKey(EVP_PKEY* evpK
     }
 }
 
+
+// 辅助函数：清理路径，移除 ., .., 多余的斜杠和尾随斜杠 (对应Go的path.Clean)
+std::string cleanPath(const std::string& path) {
+    if (path.empty()) {
+        return ".";
+    }
+    
+    std::vector<std::string> parts;
+    std::stringstream ss(path);
+    std::string part;
+    
+    // 分割路径
+    while (std::getline(ss, part, '/')) {
+        if (part.empty() || part == ".") {
+            continue; // 跳过空部分和当前目录
+        } else if (part == "..") {
+            if (!parts.empty() && parts.back() != "..") {
+                parts.pop_back(); // 回到上级目录
+            } else if (!path.empty() && path[0] != '/') {
+                parts.push_back(part); // 相对路径保留..
+            }
+        } else {
+            parts.push_back(part);
+        }
+    }
+    
+    // 重建路径
+    std::string result;
+    if (path[0] == '/') {
+        result = "/"; // 绝对路径
+    }
+    
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i > 0 || result == "/") {
+            result += "/";
+        }
+        result += parts[i];
+    }
+    
+    // 如果结果为空且原路径不是根目录，返回"."
+    if (result.empty() && path != "/") {
+        result = ".";
+    }
+    
+    return result;
+}
+
+// 辅助函数：获取父角色 (对应Go的role.Parent())
+RoleName getParentRole(RoleName role) {
+    std::string strRole = roleToString(role);
+    size_t lastSlash = strRole.find_last_of('/');
+    
+    if (lastSlash == std::string::npos) {
+        // 没有找到斜杠，返回空角色或根角色
+        return RoleName::RootRole; // 或者可以定义一个空角色
+    }
+    
+    std::string parentStr = strRole.substr(0, lastSlash);
+    return stringToRole(parentStr);
+}
 }
 }

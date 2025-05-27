@@ -7,8 +7,16 @@
 #include <chrono>
 #include <functional>
 #include <nlohmann/json.hpp>
-#include "../types.hpp"
-#include "../crypto/crypto_service.hpp"
+#include "notary/types.hpp"
+#include <variant>
+#include "notary/utils/tools.hpp"
+
+// 前向声明避免循环依赖
+namespace notary {
+namespace crypto {
+    class CryptoService;
+}
+}
 
 namespace notary {
 namespace tuf {
@@ -30,6 +38,9 @@ enum class MetadataType {
     Timestamp,
     Delegation
 };
+
+// StopWalk - 用于访问者函数信号WalkTargets停止遍历
+struct StopWalk {};
 
 // 签名结构
 struct Signature {
@@ -71,6 +82,21 @@ struct FileMeta {
 // 委托角色
 class DelegationRole {
 public:
+    // 默认构造函数
+    DelegationRole() = default;
+    
+    // 拷贝构造函数
+    DelegationRole(const DelegationRole& other) = default;
+    
+    // 赋值操作符
+    DelegationRole& operator=(const DelegationRole& other) = default;
+    
+    // 移动构造函数
+    DelegationRole(DelegationRole&& other) = default;
+    
+    // 移动赋值操作符
+    DelegationRole& operator=(DelegationRole&& other) = default;
+    
     BaseRole BaseRoleInfo;
     std::vector<std::string> Paths;
     RoleName Name;
@@ -84,7 +110,7 @@ public:
 
 // 委托信息
 struct Delegations {
-    std::map<std::string, std::shared_ptr<PublicKey>> Keys;
+    std::map<std::string, std::shared_ptr<crypto::PublicKey>> Keys;
     std::vector<DelegationRole> Roles;
     
     // JSON 序列化支持
@@ -106,7 +132,7 @@ struct Signed {
 // Root元数据内容（对应Go的Root结构体）
 struct Root {
     SignedCommon Common;
-    std::map<std::string, std::shared_ptr<PublicKey>> Keys;
+    std::map<std::string, std::shared_ptr<crypto::PublicKey>> Keys;
     std::map<RoleName, BaseRole> Roles;
     bool ConsistentSnapshot = false;
     
@@ -239,8 +265,11 @@ public:
     Result<FileMeta> GetSnapshot() const;
 };
 
+// 访问者函数返回类型
+using WalkResult = std::variant<std::monostate, StopWalk, Error>;
+
 // 访问者函数类型
-using WalkVisitorFunc = std::function<bool(std::shared_ptr<SignedTargets>, const DelegationRole&)>;
+using WalkVisitorFunc = std::function<WalkResult(std::shared_ptr<SignedTargets>, const DelegationRole&)>;
 
 // TUF Repo类 - 元数据的内存表示
 class Repo {
@@ -252,8 +281,10 @@ public:
     std::shared_ptr<SignedRoot> GetRoot() const { return root_; }
     void SetRoot(std::shared_ptr<SignedRoot> root) { root_ = root; }
     
-    std::shared_ptr<SignedTargets> GetTargets(RoleName role = RoleName::TargetsRole) const;
+    std::shared_ptr<SignedTargets> GetTargets(RoleName role) const;
     void SetTargets(std::shared_ptr<SignedTargets> targets, RoleName role = RoleName::TargetsRole);
+    std::map<RoleName, std::shared_ptr<SignedTargets>> GetTargets() const { return targets_; }
+    void SetTargets(std::map<RoleName, std::shared_ptr<SignedTargets>> targets) { targets_ = targets; }
     
     std::shared_ptr<SignedSnapshot> GetSnapshot() const { return snapshot_; }
     void SetSnapshot(std::shared_ptr<SignedSnapshot> snapshot) { snapshot_ = snapshot; }
@@ -276,17 +307,17 @@ public:
     Result<std::shared_ptr<Signed>> SignTimestamp(const std::chrono::time_point<std::chrono::system_clock>& expires);
     
     // 目标管理
-    Error AddTarget(const std::string& targetName, const std::vector<uint8_t>& targetData, 
-                   RoleName role = RoleName::TargetsRole);
-    Error RemoveTarget(const std::string& targetName, RoleName role = RoleName::TargetsRole);
+    // Error AddTarget(const std::string& targetName, const std::vector<uint8_t>& targetData, 
+    //                RoleName role = RoleName::TargetsRole);
+    // Error RemoveTarget(const std::string& targetName, RoleName role = RoleName::TargetsRole);
     
     // 批量目标管理
     Error AddTargets(RoleName role, const std::map<std::string, FileMeta>& targets);
     Error RemoveTargets(RoleName role, const std::vector<std::string>& targets);
     
     // 密钥管理
-    Error AddBaseKeys(RoleName role, const std::vector<std::shared_ptr<PublicKey>>& keys);
-    Error ReplaceBaseKeys(RoleName role, const std::vector<std::shared_ptr<PublicKey>>& keys);
+    Error AddBaseKeys(RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys);
+    Error ReplaceBaseKeys(RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys);
     Error RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs);
     
     // 角色管理
@@ -295,7 +326,7 @@ public:
     std::vector<BaseRole> GetAllLoadedRoles() const;
     
     // 委托管理
-    Error UpdateDelegationKeys(RoleName roleName, const std::vector<std::shared_ptr<PublicKey>>& addKeys, 
+    Error UpdateDelegationKeys(RoleName roleName, const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys, 
                               const std::vector<std::string>& removeKeys, int newThreshold);
     Error PurgeDelegationKeys(RoleName role, const std::vector<std::string>& removeKeys);
     Error UpdateDelegationPaths(RoleName roleName, const std::vector<std::string>& addPaths, 
@@ -331,23 +362,20 @@ private:
     // 内部签名方法
     Result<std::shared_ptr<Signed>> sign(std::shared_ptr<Signed> signedData, 
                                         const std::vector<BaseRole>& roles, 
-                                        const std::vector<std::shared_ptr<PublicKey>>& optionalKeys = {});
+                                        const std::vector<std::shared_ptr<crypto::PublicKey>>& optionalKeys = {});
     
     // 辅助方法
     bool isValidPath(const std::string& candidatePath, const DelegationRole& delgRole) const;
     bool isAncestorRole(RoleName candidateChild, RoleName candidateAncestor) const;
 };
 
-// 辅助函数：角色名称转换
-std::string roleNameToString(RoleName role);
-RoleName stringToRoleName(const std::string& roleStr);
-
 // 辅助函数：角色验证
 bool IsDelegation(RoleName role);
+bool IsWildDelegation(RoleName role);
 bool IsValidTargetsRole(RoleName role);
 
 // 辅助函数：创建新的TUF对象
-std::shared_ptr<SignedRoot> NewRoot(const std::map<std::string, std::shared_ptr<PublicKey>>& keys,
+std::shared_ptr<SignedRoot> NewRoot(const std::map<std::string, std::shared_ptr<crypto::PublicKey>>& keys,
                                    const std::map<RoleName, BaseRole>& roles, 
                                    bool consistent = false);
 
@@ -364,7 +392,7 @@ std::chrono::time_point<std::chrono::system_clock> iso8601ToTime(const std::stri
 
 // 辅助函数：创建FileMeta对象
 Result<FileMeta> NewFileMeta(const std::vector<uint8_t>& data, 
-                            const std::vector<std::string>& hashAlgorithms = {"sha256"});
+                            const std::vector<std::string>& hashAlgorithms = {"sha256","sha512"});
 
 } // namespace tuf
 } // namespace notary 

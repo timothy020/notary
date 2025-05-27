@@ -139,21 +139,16 @@ std::shared_ptr<PrivateKey> NewPrivateKey(std::shared_ptr<PublicKey> publicKey, 
     const std::string& algorithm = publicKey->Algorithm();
     
     if (algorithm == ECDSA_KEY || algorithm == ECDSA_X509_KEY) {
-        return std::make_shared<ECDSAPrivateKey>(publicKey, privateData);
+        // 将PublicKey转换为ECDSAPublicKey
+        auto ecdsaPublicKey = std::dynamic_pointer_cast<ECDSAPublicKey>(publicKey);
+        if (ecdsaPublicKey) {
+            return std::make_shared<ECDSAPrivateKey>(ecdsaPublicKey, privateData);
+        } else {
+            throw std::runtime_error("无法将PublicKey转换为ECDSAPublicKey");
+        }
     } else {
         throw std::runtime_error("未知密钥类型");
     }
-    // } else if (algorithm == RSA_KEY || algorithm == RSA_X509_KEY) {
-    //     return std::make_shared<RSAPrivateKey>(publicKey, privateData);
-    // } else if (algorithm == ED25519_KEY) {
-    //     auto ed25519Public = std::dynamic_pointer_cast<ED25519PublicKey>(publicKey);
-    //     if (ed25519Public) {
-    //         return std::make_shared<ED25519PrivateKey>(ed25519Public, privateData);
-    // }
-    //     return std::make_shared<UnknownPrivateKey>(publicKey, privateData);
-    // } else {
-    //     return std::make_shared<UnknownPrivateKey>(publicKey, privateData);
-    // }
 }
 
 // // ECDSAPublicKey实现

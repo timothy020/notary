@@ -4,9 +4,29 @@
 #include <vector>
 #include <variant>
 #include <memory>
-#include "notary/crypto/keys.hpp"
+
+// 前向声明避免循环依赖
+namespace notary {
+namespace crypto {
+    class PublicKey;
+}
+}
 
 namespace notary {
+
+// 签名算法常量
+const std::string EDDSASignature        = "eddsa";
+const std::string RSAPSSSignature       = "rsapss";
+const std::string RSAPKCS1v15Signature  = "rsapkcs1v15";
+const std::string ECDSASignature        = "ecdsa";
+const std::string PyCryptoSignature     = "pycrypto-pkcs#1 pss";
+
+// 密钥算法常量
+const std::string ED25519_KEY       = "ed25519";
+const std::string RSA_KEY           = "rsa";
+const std::string RSA_X509_KEY      = "rsa-x509";
+const std::string ECDSA_KEY         = "ecdsa";
+const std::string ECDSA_X509_KEY    = "ecdsa-x509";
 
 // 错误类型
 class Error {
@@ -33,6 +53,7 @@ private:
 template<typename T>
 class Result {
 public:
+    Result() : hasError_(true) {}
     Result(const T& value) : value_(value), hasError_(false) {}
     Result(const Error& error) : error_(error), hasError_(true) {}
     
@@ -46,6 +67,13 @@ private:
     bool hasError_;
 };
 
+
+// 角色名称常量
+const std::string ROOT_ROLE = "root";
+const std::string TARGETS_ROLE = "targets";
+const std::string SNAPSHOT_ROLE = "snapshot";
+const std::string TIMESTAMP_ROLE = "timestamp";
+
 // 角色名称
 enum class RoleName {
     RootRole,
@@ -57,28 +85,21 @@ enum class RoleName {
 // 角色名称转换函数
 inline std::string roleToString(RoleName role) {
     switch (role) {
-        case RoleName::RootRole: return "root";
-        case RoleName::TargetsRole: return "targets";
-        case RoleName::SnapshotRole: return "snapshot";
-        case RoleName::TimestampRole: return "timestamp";
+        case RoleName::RootRole: return ROOT_ROLE;
+        case RoleName::TargetsRole: return TARGETS_ROLE;
+        case RoleName::SnapshotRole: return SNAPSHOT_ROLE;
+        case RoleName::TimestampRole: return TIMESTAMP_ROLE;
         default: return "unknown";
     }
 }
 
 inline RoleName stringToRole(const std::string& roleStr) {
-    if (roleStr == "root") return RoleName::RootRole;
-    if (roleStr == "targets") return RoleName::TargetsRole;
-    if (roleStr == "snapshot") return RoleName::SnapshotRole;
-    if (roleStr == "timestamp") return RoleName::TimestampRole;
+    if (roleStr == ROOT_ROLE) return RoleName::RootRole;
+    if (roleStr == TARGETS_ROLE) return RoleName::TargetsRole;
+    if (roleStr == SNAPSHOT_ROLE) return RoleName::SnapshotRole;
+    if (roleStr == TIMESTAMP_ROLE) return RoleName::TimestampRole;
     return RoleName::TargetsRole; // 默认值
 }
-
-// 密钥算法
-enum class KeyAlgorithm {
-    ECDSA,
-    RSA,
-    ED25519
-};
 
 
 // 基础角色
@@ -87,18 +108,27 @@ public:
     // 默认构造函数 - 为了满足std::map的要求
     BaseRole() : name_(RoleName::RootRole), threshold_(0) {}
     
-    BaseRole(RoleName name, int threshold, std::vector<std::shared_ptr<crypto::PublicKey>> keys)
-        : name_(name), threshold_(threshold), keys_(std::move(keys)) {}
+    // 完整构造函数
+    BaseRole(RoleName name, int threshold, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys)
+        : name_(name), threshold_(threshold), keys_(keys) {}
     
     RoleName Name() const { return name_; }
     int Threshold() const { return threshold_; }
     const std::vector<std::shared_ptr<crypto::PublicKey>>& Keys() const { return keys_; }
     std::vector<std::shared_ptr<crypto::PublicKey>>& Keys() { return keys_; }
     
+    // 添加设置方法
+    void SetName(RoleName name) { name_ = name; }
+    void SetThreshold(int threshold) { threshold_ = threshold; }
+    void SetKeys(const std::vector<std::shared_ptr<crypto::PublicKey>>& keys) { keys_ = keys; }
+    
+    // 添加Equals方法
+    bool Equals(const BaseRole& other) const;
+    
 private:
     RoleName name_;
     int threshold_;
-    std::vector<std::shared_ptr<crypto::PublicKey>> keys_;
+    std::vector<std::shared_ptr<crypto::PublicKey>> keys_; // TODO: 需要修改为map
 };
 
 // 全局唯一名称

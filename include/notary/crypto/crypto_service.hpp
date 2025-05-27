@@ -68,7 +68,7 @@ private:
         std::shared_ptr<PublicKey> publicKey;
         std::shared_ptr<PrivateKey> privateKey;
     };
-    Result<KeyPair> generateKeyPair(const std::string& algorithm);
+    Result<std::shared_ptr<PrivateKey>> generatePrivateKey(const std::string& algorithm);
     
 private:
     std::string defaultPassphrase_;

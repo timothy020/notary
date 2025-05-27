@@ -6,17 +6,11 @@
 #include <map>
 #include <functional>
 #include "notary/utils/logger.hpp"
+#include "notary/types.hpp"
 
 namespace notary {
 namespace crypto {
 
-
-// 密钥算法常量
-const std::string ECDSA_KEY = "ecdsa";
-const std::string ECDSA_X509_KEY = "ecdsa-x509";
-const std::string RSA_KEY = "rsa";
-const std::string RSA_X509_KEY = "rsa-x509";
-const std::string ED25519_KEY = "ed25519";
 
 // 密钥对结构
 struct KeyPair {
@@ -89,8 +83,14 @@ public:
 // ECDAPrivateKey is a private key for ECDSA
 class ECDSAPrivateKey : public PrivateKey {  // PrivateKey继承自PublicKey
 public:
-    ECDSAPrivateKey(const ECDSAPublicKey& publicKey, const std::vector<uint8_t>& privateKey)
-        : publicKey_(std::make_shared<ECDSAPublicKey>(publicKey)), privateData_(privateKey) {}
+    // 接受shared_ptr参数的构造函数
+    ECDSAPrivateKey(std::shared_ptr<ECDSAPublicKey> publicKey, const std::vector<uint8_t>& privateKey)
+        : publicKey_(publicKey), privateData_(privateKey) {}
+    
+    // 接受引用参数的构造函数（保持向后兼容）
+    // ECDSAPrivateKey(const ECDSAPublicKey& publicKey, const std::vector<uint8_t>& privateKey)
+    //     : publicKey_(std::make_shared<ECDSAPublicKey>(publicKey)), privateData_(privateKey) {}
+    
     // 继承自PublicKey的方法
     std::string ID() override { return publicKey_->ID(); }
     std::string Algorithm() const override { return publicKey_->Algorithm(); }

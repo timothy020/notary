@@ -26,21 +26,6 @@ std::vector<uint8_t> generateRandomBytes(size_t length) {
     return bytes;
 }
 
-// 计算 SHA256 哈希
-std::string calculateSHA256(const std::vector<uint8_t>& data) {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256_CTX sha256;
-    SHA256_Init(&sha256);
-    SHA256_Update(&sha256, data.data(), data.size());
-    SHA256_Final(hash, &sha256);
-    
-    std::stringstream ss;
-    for(int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
-    }
-    return ss.str();
-}
-
 // 将 EC_KEY 转换为 DER 格式
 std::vector<uint8_t> ecKeyToDER(EC_KEY* key, bool isPrivate) {
     std::vector<uint8_t> derData;
@@ -85,20 +70,20 @@ Result<std::shared_ptr<PublicKey>> CryptoService::Create(RoleName role,
     }
     
     // 生成密钥对
-    auto keyPairResult = generateKeyPair(algorithm);
-    if (!keyPairResult.ok()) {
-        return Result<std::shared_ptr<PublicKey>>(keyPairResult.error());
+    auto privateKeyResult = generatePrivateKey(algorithm);
+    if (!privateKeyResult.ok()) {
+        return Result<std::shared_ptr<PublicKey>>(privateKeyResult.error());
     }
     
-    auto keyPair = keyPairResult.value();
+    auto privateKey = privateKeyResult.value();
     
     // 添加密钥到存储
-    auto addResult = AddKey(role, gun, keyPair.privateKey);
+    auto addResult = AddKey(role, gun, privateKey);
     if (addResult.hasError()) {
         return Result<std::shared_ptr<PublicKey>>(addResult);
     }
     
-    return Result<std::shared_ptr<PublicKey>>(keyPair.publicKey);
+    return Result<std::shared_ptr<PublicKey>>(privateKey->GetPublicKey());
 }
 
 Result<std::tuple<std::shared_ptr<PrivateKey>, RoleName>> CryptoService::GetPrivateKey(const std::string& keyID) {
@@ -203,69 +188,69 @@ std::map<std::string, RoleName> CryptoService::ListAllKeys() {
     return result;
 }
 
-Result<CryptoService::KeyPair> CryptoService::generateKeyPair(const std::string& algorithm) {
-    if (algorithm == "ecdsa") {
-        // 创建 EC_KEY 对象
-        std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)> ecKey(
-            EC_KEY_new_by_curve_name(NID_X9_62_prime256v1),
-            EC_KEY_free);
-        
-        if (!ecKey) {
-            return Result<KeyPair>(Error("Failed to create EC key"));
-        }
-        
-        // 生成密钥对
-        if (EC_KEY_generate_key(ecKey.get()) != 1) {
-            return Result<KeyPair>(Error("Failed to generate EC key pair"));
-        }
-        
-        try {
-            // 检查EC_KEY的有效性
-            if (!EC_KEY_check_key(ecKey.get())) {
-                return Result<KeyPair>(Error("Generated EC key is invalid"));
+Result<std::shared_ptr<PrivateKey>> CryptoService::generatePrivateKey(const std::string& algorithm) {
+    if (algorithm == ECDSA_KEY) {
+            // 创建 EC_KEY 对象
+            std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)> ecKey(
+                EC_KEY_new_by_curve_name(NID_X9_62_prime256v1),
+                EC_KEY_free);
+            
+            if (!ecKey) {
+            return Result<std::shared_ptr<PrivateKey>>(Error("Failed to create EC key"));
             }
             
-            // 获取公钥和私钥的 DER 编码
-            std::vector<uint8_t> pubKeyDer;
-            std::vector<uint8_t> privKeyDer;
+            // 生成密钥对
+            if (EC_KEY_generate_key(ecKey.get()) != 1) {
+            return Result<std::shared_ptr<PrivateKey>>(Error("Failed to generate EC key pair"));
+            }
             
             try {
-                pubKeyDer = ecKeyToDER(ecKey.get(), false);
-                privKeyDer = ecKeyToDER(ecKey.get(), true);
+                // 检查EC_KEY的有效性
+                if (!EC_KEY_check_key(ecKey.get())) {
+                return Result<std::shared_ptr<PrivateKey>>(Error("Generated EC key is invalid"));
+                }
+                
+                // 获取公钥和私钥的 DER 编码
+                std::vector<uint8_t> pubKeyDer;
+                std::vector<uint8_t> privKeyDer;
+                
+                try {
+                    pubKeyDer = ecKeyToDER(ecKey.get(), false);
+                    privKeyDer = ecKeyToDER(ecKey.get(), true);
+                } catch (const std::exception& e) {
+                return Result<std::shared_ptr<PrivateKey>>(Error(std::string("Failed to encode key to DER: ") + e.what()));
+                }
+                
+                // 验证DER数据长度
+                if (pubKeyDer.empty()) {
+                return Result<std::shared_ptr<PrivateKey>>(Error("Generated EC public key DER data is empty"));
+                }
+                if (privKeyDer.empty()) {
+                return Result<std::shared_ptr<PrivateKey>>(Error("Generated EC private key DER data is empty"));
+                }
+                
+                // 创建公钥和私钥对象
+                auto pubKey = std::make_shared<ECDSAPublicKey>(pubKeyDer);
+                auto privKey = std::make_shared<ECDSAPrivateKey>(pubKey, privKeyDer);
+                
+                // 验证密钥ID生成
+                std::string keyID = pubKey->ID();
+                if (keyID.empty()) {
+                return Result<std::shared_ptr<PrivateKey>>(Error("Failed to generate key ID"));
+                }
+                
+            return Result<std::shared_ptr<PrivateKey>>(privKey);
             } catch (const std::exception& e) {
-                return Result<KeyPair>(Error(std::string("Failed to encode key to DER: ") + e.what()));
-            }
-            
-            // 验证DER数据长度
-            if (pubKeyDer.empty()) {
-                return Result<KeyPair>(Error("Generated EC public key DER data is empty"));
-            }
-            if (privKeyDer.empty()) {
-                return Result<KeyPair>(Error("Generated EC private key DER data is empty"));
-            }
-            
-            // 创建公钥和私钥对象
-            auto pubKey = std::make_shared<ECDSAPublicKey>(pubKeyDer);
-            auto privKey = std::make_shared<ECDSAPrivateKey>(pubKey, privKeyDer);
-            
-            // 验证密钥ID生成
-            std::string keyID = pubKey->ID();
-            if (keyID.empty()) {
-                return Result<KeyPair>(Error("Failed to generate key ID"));
-            }
-            
-            return Result<KeyPair>(KeyPair{pubKey, privKey});
-        } catch (const std::exception& e) {
-            return Result<KeyPair>(Error(std::string("Failed to create key objects: ") + e.what()));
+            return Result<std::shared_ptr<PrivateKey>>(Error(std::string("Failed to create key objects: ") + e.what()));
         }
-    } else if (algorithm == "ed25519") {
-        // TODO: 实现 ED25519 密钥对生成
-        return Result<KeyPair>(Error("ED25519 not implemented"));
-    } else if (algorithm == "rsa") {
-        // TODO: 实现 RSA 密钥对生成
-        return Result<KeyPair>(Error("RSA not implemented"));
+    } else if (algorithm == ED25519_KEY) {
+            // TODO: 实现 ED25519 密钥对生成
+        return Result<std::shared_ptr<PrivateKey>>(Error("Unsupported key algorithm: " + algorithm));
+    } else if (algorithm == RSA_KEY) {
+            // TODO: 实现 RSA 密钥对生成
+        return Result<std::shared_ptr<PrivateKey>>(Error("Unsupported key algorithm: " + algorithm));
     } else {
-        return Result<KeyPair>(Error("Unsupported key algorithm: " + algorithm));
+        return Result<std::shared_ptr<PrivateKey>>(Error("Unsupported key algorithm: " + algorithm));
     }
 }
 

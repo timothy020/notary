@@ -81,23 +81,10 @@ Error GetKeyHandler(const Context& ctx, Response& resp) {
     }
     
     // 检查算法
-    if (ctx.keyAlgorithm.empty()) {
+    std::string algorithm = ctx.keyAlgorithm;
+    if (algorithm.empty()) {
         utils::GetLogger().Error("未指定密钥算法");
         return Error::ErrNoKeyAlgorithm;
-    }
-    
-    // 解析算法
-    KeyAlgorithm algo = KeyAlgorithm::ECDSA;
-    if (ctx.keyAlgorithm == "ecdsa") {
-        algo = KeyAlgorithm::ECDSA;
-    } else if (ctx.keyAlgorithm == "rsa") {
-        algo = KeyAlgorithm::RSA;
-    } else if (ctx.keyAlgorithm == "ed25519") {
-        algo = KeyAlgorithm::ED25519;
-    } else {
-        utils::GetLogger().Error("不支持的算法", 
-            utils::LogContext().With("algorithm", ctx.keyAlgorithm));
-        return Error(10, "不支持的算法: " + ctx.keyAlgorithm); // ErrNoKeyAlgorithm
     }
     
     // 获取或创建密钥
@@ -105,9 +92,9 @@ Error GetKeyHandler(const Context& ctx, Response& resp) {
         utils::LogContext()
             .With("gun", gun)
             .With("role", roleName)
-            .With("algorithm", ctx.keyAlgorithm));
+            .With("algorithm", algorithm));
     
-    auto keyResult = ctx.cryptoService->Create(role, gun, algo);
+    auto keyResult = ctx.cryptoService->Create(role, gun, algorithm);
     if (!keyResult.ok()) {
         utils::GetLogger().Error("创建密钥失败", 
             utils::LogContext().With("error", keyResult.error().what()));
@@ -118,22 +105,13 @@ Error GetKeyHandler(const Context& ctx, Response& resp) {
     
     // 创建响应
     json keyJson;
-    if (algo == KeyAlgorithm::ECDSA) {
+    if (algorithm == ECDSA_KEY) {
         auto ecdsaKey = std::dynamic_pointer_cast<crypto::ECDSAPublicKey>(key);
         if (ecdsaKey) {
-            const auto& derData = ecdsaKey->GetDERData();
+            const auto& derData = ecdsaKey->Public();
             
             // Base64编码DER数据
-            std::string keyData;
-            BIO* b64 = BIO_new(BIO_f_base64());
-            BIO* mem = BIO_new(BIO_s_mem());
-            BIO_push(b64, mem);
-            BIO_write(b64, derData.data(), derData.size());
-            BIO_flush(b64);
-            BUF_MEM* bptr;
-            BIO_get_mem_ptr(b64, &bptr);
-            keyData = std::string(bptr->data, bptr->length);
-            BIO_free_all(b64);
+            std::string keyData = utils::Base64Encode(derData);
             
             try {
                 keyJson = {

@@ -8,20 +8,28 @@ file(GLOB_RECURSE SOURCES
     "config/*.cpp"
     "utils/*.cpp"
     "tuf/*.cpp"
+    "changelist/*.cpp"
 )
 
 # 创建库
 add_library(notary_lib 
     crypto/crypto_service.cpp
     crypto/keys.cpp
+    crypto/sign.cpp
     main.cpp
     repository.cpp
     storage/metadata_store.cpp
+    storage/key_storage.cpp
+    storage/storage.cpp
     server/server.cpp
     server/handlers/default.cpp
     server/errors/errors.cpp
     server/storage/file_storage.cpp
     utils/logger.cpp
+    utils/tools.cpp
+    utils/helpers.cpp
+    changelist/changelist.cpp
+    types.cpp
     server_main.cpp
     tuf/repo.cpp
 )
