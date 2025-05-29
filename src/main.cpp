@@ -61,8 +61,8 @@ Error maybeAutoPublish(bool autoPublish, const std::string& gun,
     if (!autoPublish) {
         return Error();
     }
-    
-    std::cout << "Publishing changes to " << gun << std::endl;
+    utils::GetLogger().Info("Publishing changes to " + gun, utils::LogContext()
+        .With("serverURL", serverURL));
     return repo.Publish(); // 调用Repository类的Publish方法
 }
 
@@ -133,20 +133,23 @@ int main(int argc, char** argv) {
             // 1. 加载配置
             auto configErr = loadConfig(configFile, trustDir, serverURL);
             if (!configErr.ok()) {
-                std::cerr << "Error loading configuration: " << configErr.what() << std::endl;
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
                 return;
             }
             
             if (debug) {
-                std::cout << "Using trust directory: " << trustDir << std::endl;
-                std::cout << "Using server URL: " << serverURL << std::endl;
-                std::cout << "Initializing GUN: " << gun << std::endl;
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Initializing GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
             }
             
             // 设置默认密码（如果未提供）
             if (password.empty()) {
                 password = "changeme";  // 默认密码
-                std::cout << "Warning: Using default password. Please change it for production use." << std::endl;
+                utils::GetLogger().Warn("Using default password. Please change it for production use.");
             }
             
             // 2. 创建仓库工厂并获取仓库实例
@@ -157,7 +160,7 @@ int main(int argc, char** argv) {
             std::vector<std::string> rootKeyIDs;
             auto keyErr = importRootKey(rootKey, rootKeyIDs);
             if (!keyErr.ok()) {
-                std::cerr << "Error importing root key: " << keyErr.what() << std::endl;
+                utils::GetLogger().Error("Error importing root key: " + keyErr.what());
                 return;
             }
             
@@ -165,7 +168,7 @@ int main(int argc, char** argv) {
             std::vector<std::string> rootCerts;
             auto certErr = importRootCert(rootCert, rootCerts);
             if (!certErr.ok()) {
-                std::cerr << "Error importing root certificate: " << certErr.what() << std::endl;
+                utils::GetLogger().Error("Error importing root certificate: " + certErr.what());
                 return;
             }
             
@@ -177,22 +180,22 @@ int main(int argc, char** argv) {
             // 6. 初始化仓库
             auto initErr = repo.Initialize(rootKeyIDs);
             if (!initErr.ok()) {
-                std::cerr << "Error initializing repository: " << initErr.what() << std::endl;
+                utils::GetLogger().Error("Error initializing repository: " + initErr.what());
                 return;
             }
             
-            std::cout << "Successfully initialized trust data for " << gun << std::endl;
-            std::cout << "Created key files and metadata in: " << trustDir << std::endl;
+            utils::GetLogger().Info("Successfully initialized trust data for " + gun, utils::LogContext()
+                .With("trustDir", trustDir));
             
             // 7. 可能自动发布
             auto pubErr = maybeAutoPublish(autoPublish, gun, serverURL, repo);
             if (!pubErr.ok()) {
-                std::cerr << "Error publishing changes: " << pubErr.what() << std::endl;
+                utils::GetLogger().Error("Error publishing changes: " + pubErr.what());
                 return;
             }
             
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
             return;
         }
     });
@@ -216,20 +219,23 @@ int main(int argc, char** argv) {
             // 1. 加载配置
             auto configErr = loadConfig(configFile, trustDir, serverURL);
             if (!configErr.ok()) {
-                std::cerr << "Error loading configuration: " << configErr.what() << std::endl;
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
                 return;
             }
             
             if (debug) {
-                std::cout << "Using trust directory: " << trustDir << std::endl;
-                std::cout << "Using server URL: " << serverURL << std::endl;
-                std::cout << "Adding target to GUN: " << gun << std::endl;
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Adding target to GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
             }
             
             // 设置默认密码（如果未提供）
             if (password.empty()) {
                 password = "changeme";  // 默认密码
-                std::cout << "Warning: Using default password. Please change it for production use." << std::endl;
+                utils::GetLogger().Warn("Using default password. Please change it for production use.");
             }
             
             // 2. 创建仓库工厂并获取仓库实例
@@ -241,7 +247,7 @@ int main(int argc, char** argv) {
             if (!customPath.empty()) {
                 auto customResult = getTargetCustom(customPath);
                 if (!customResult.ok()) {
-                    std::cerr << "Error loading custom data: " << customResult.error().what() << std::endl;
+                    utils::GetLogger().Error("Error loading custom data: " + customResult.error().what());
                     return;
                 }
                 customData = customResult.value();
@@ -250,29 +256,28 @@ int main(int argc, char** argv) {
             // 4. 创建目标对象
             auto targetResult = Repository::NewTarget(targetName, targetPath, customData);
             if (!targetResult.ok()) {
-                std::cerr << "Error creating target: " << targetResult.error().what() << std::endl;
+                utils::GetLogger().Error("Error creating target: " + targetResult.error().what());
                 return;
             }
             
             // 5. 添加目标
             auto addErr = repo.AddTarget(targetResult.value(), roles);
             if (!addErr.ok()) {
-                std::cerr << "Error adding target: " << addErr.what() << std::endl;
+                utils::GetLogger().Error("Error adding target: " + addErr.what());
                 return;
             }
             
-            std::cout << "Addition of target \"" << targetName << "\" to repository \"" 
-                      << gun << "\" staged for next publish." << std::endl;
+            utils::GetLogger().Info("Addition of target \"" + targetName + "\" to repository \"" + gun + "\" staged for next publish.");
             
             // 6. 可能自动发布
             auto pubErr = maybeAutoPublish(autoPublish, gun, serverURL, repo);
             if (!pubErr.ok()) {
-                std::cerr << "Error publishing changes: " << pubErr.what() << std::endl;
+                utils::GetLogger().Error("Error publishing changes: " + pubErr.what());
                 return;
             }
             
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
             return;
         }
     });
@@ -288,20 +293,23 @@ int main(int argc, char** argv) {
             // 1. 加载配置
             auto configErr = loadConfig(configFile, trustDir, serverURL);
             if (!configErr.ok()) {
-                std::cerr << "Error loading configuration: " << configErr.what() << std::endl;
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
                 return;
             }
             
             if (debug) {
-                std::cout << "Using trust directory: " << trustDir << std::endl;
-                std::cout << "Using server URL: " << serverURL << std::endl;
-                std::cout << "Publishing changes for GUN: " << gun << std::endl;
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Publishing changes for GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
             }
             
             // 设置默认密码（如果未提供）
             if (password.empty()) {
                 password = "changeme";  // 默认密码
-                std::cout << "Warning: Using default password. Please change it for production use." << std::endl;
+                utils::GetLogger().Warn("Using default password. Please change it for production use.");
             }
             
             // 2. 创建仓库工厂并获取仓库实例
@@ -311,14 +319,14 @@ int main(int argc, char** argv) {
             // 3. 发布更改
             auto pubErr = repo.Publish();
             if (!pubErr.ok()) {
-                std::cerr << "Error publishing changes: " << pubErr.what() << std::endl;
+                utils::GetLogger().Error("Error publishing changes: " + pubErr.what());
                 return;
             }
             
-            std::cout << "Successfully published changes for " << gun << std::endl;
+            utils::GetLogger().Info("Successfully published changes for " + gun);
             
         } catch (const std::exception& e) {
-            std::cerr << "Error: " << e.what() << std::endl;
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
             return;
         }
     });

@@ -8,7 +8,7 @@ namespace crypto {
 
 
 // 主要的Sign函数实现
-Error Sign(CryptoService& service, std::shared_ptr<tuf::Signed> s, 
+Error Sign(std::shared_ptr<CryptoService> service, std::shared_ptr<tuf::Signed> s, 
           const std::vector<std::shared_ptr<PublicKey>>& signingKeys,
           int minSignatures, 
           const std::vector<std::shared_ptr<PublicKey>>& otherWhitelistedKeys) {
@@ -33,7 +33,7 @@ Error Sign(CryptoService& service, std::shared_ptr<tuf::Signed> s,
         tufIDs[keyID] = key;
         
         // 从CryptoService获取私钥
-        auto privateKeyResult = service.GetPrivateKey(keyID);
+        auto privateKeyResult = service->GetPrivateKey(keyID);
         if (!privateKeyResult.ok()) {
             missingKeyIDs.push_back(keyID);
             continue;
@@ -79,27 +79,27 @@ Error Sign(CryptoService& service, std::shared_ptr<tuf::Signed> s,
     }
     
     // TODO:清理并保留已有签名（允许旧签名）
-    // for (const auto& sig : s->Signatures) {
-    //     // 如果这个签名是新生成的，跳过
-    //     if (signingKeyIDs.find(sig.KeyID) != signingKeyIDs.end()) {
-    //         continue;
-    //     }
+    for (const auto& sig : s->Signatures) {
+        // 如果这个签名是新生成的，跳过
+        if (signingKeyIDs.find(sig.KeyID) != signingKeyIDs.end()) {
+            continue;
+        }
         
-    //     // 检查密钥是否仍然是有效的签名密钥
-    //     auto keyIt = tufIDs.find(sig.KeyID);
-    //     if (keyIt == tufIDs.end()) {
-    //         continue; // 密钥不再是有效的签名密钥
-    //     }
+        // 检查密钥是否仍然是有效的签名密钥
+        auto keyIt = tufIDs.find(sig.KeyID);
+        if (keyIt == tufIDs.end()) {
+            continue; // 密钥不再是有效的签名密钥
+        }
         
-    //     // 验证签名是否仍然有效
-    //     Error verifyErr = VerifySignature(s->signedData, sig, keyIt->second);
-    //     if (!verifyErr.ok()) {
-    //         continue; // 签名不再有效
-    //     }
+        // 验证签名是否仍然有效
+        // Error verifyErr = VerifySignature(s->signedData, sig, keyIt->second);
+        // if (!verifyErr.ok()) {
+        //     continue; // 签名不再有效
+        // }
         
-    //     // 保留仍然代表有效密钥且本身有效的签名
-    //     signatures.push_back(sig);
-    // }
+        // 保留仍然代表有效密钥且本身有效的签名
+        signatures.push_back(sig);
+    }
     
     // 更新签名列表
     s->Signatures = signatures;

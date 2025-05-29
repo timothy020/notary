@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <tuple>
 #include <sstream>
+#include <cctype>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -109,9 +110,27 @@ std::string HexEncode(const std::vector<uint8_t>& data) {
 std::vector<uint8_t> HexDecode(const std::string& hex) {
     std::vector<uint8_t> data;
     data.reserve(hex.size() / 2);
+    
+    // 验证输入格式
+    if (hex.size() % 2 != 0) {
+        throw std::invalid_argument("Hex string must have even length");
+    }
+    
     for (size_t i = 0; i < hex.size(); i += 2) {
         std::string byteString = hex.substr(i, 2);
-        data.push_back(static_cast<uint8_t>(std::stoul(byteString, nullptr, 16)));
+        
+        // 验证是否为有效的十六进制字符
+        for (char c : byteString) {
+            if (!std::isxdigit(c)) {
+                throw std::invalid_argument("Invalid hex character: " + std::string(1, c));
+            }
+        }
+        
+        try {
+            data.push_back(static_cast<uint8_t>(std::stoul(byteString, nullptr, 16)));
+        } catch (const std::exception& e) {
+            throw std::invalid_argument("Failed to decode hex byte: " + byteString);
+        }
     }
     return data;
 }

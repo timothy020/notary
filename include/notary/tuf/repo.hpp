@@ -184,9 +184,6 @@ public:
     virtual json toJson() const;
     virtual void fromJson(const json& j);
     
-    // 构建完整的带签名的JSON
-    json toSignedJson() const;
-    
     // 对应Go的ToSigned方法 - 用于签名流程
     Result<std::shared_ptr<notary::tuf::Signed>> ToSigned() const;
     
@@ -275,7 +272,7 @@ using WalkVisitorFunc = std::function<WalkResult(std::shared_ptr<SignedTargets>,
 class Repo {
 public:
     // 构造函数
-    Repo(crypto::CryptoService& cryptoService);
+    Repo(std::shared_ptr<crypto::CryptoService> cryptoService);
     
     // 获取/设置元数据
     std::shared_ptr<SignedRoot> GetRoot() const { return root_; }
@@ -351,7 +348,7 @@ private:
     std::map<RoleName, std::shared_ptr<SignedTargets>> targets_;
     std::shared_ptr<SignedSnapshot> snapshot_;
     std::shared_ptr<SignedTimestamp> timestamp_;
-    crypto::CryptoService& cryptoService_;
+    std::shared_ptr<crypto::CryptoService> cryptoService_;
     
     // 原始root角色（用于密钥轮换）
     BaseRole originalRootRole_;

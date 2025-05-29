@@ -4,6 +4,7 @@
 #include "notary/crypto/keys.hpp"
 #include "notary/utils/helpers.hpp"
 #include "notary/changelist/changelist.hpp"
+#include "notary/storage/key_storage.hpp"
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -336,10 +337,21 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     : gun_(gun)
     , trustDir_(trustDir)
     , serverURL_(serverURL)
-    , changelist_(std::make_shared<changelist::FileChangelist>(trustDir))
-    , cache_(std::make_shared<storage::FileSystemStorage>(trustDir, ".json"))
+    , changelist_(std::make_shared<changelist::FileChangelist>(trustDir+"/changelist"))
+    , cache_(std::make_shared<storage::FileSystemStorage>(trustDir+"/tuf", ".json"))
     , remoteStore_(std::make_shared<storage::RemoteStore>(serverURL))
     {
+    // 初始化cryptoService_
+    // 定义一个简单的 PassRetriever，表示无密码
+    auto passRetriever = [](const std::string& keyName,
+                                  const std::string& alias,
+                                  bool createNew,
+                                  int attempts) -> std::tuple<std::string, bool, Error> {
+        // 返回空密码（""），不放弃（false），无错误（Error()）
+        return std::make_tuple("", false, Error());
+    };
+    std::unique_ptr<storage::GenericKeyStore> keyStores = notary::storage::GenericKeyStore::NewKeyFileStore(trustDir+"/private", passRetriever);
+    cryptoService_ = std::make_shared<crypto::CryptoService>(std::vector<std::shared_ptr<storage::GenericKeyStore>>{std::move(keyStores)});
     
     // 初始化TUF Repo
     tufRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
@@ -347,7 +359,7 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
 }
 
 void Repository::SetPassphrase(const std::string& passphrase) {
-    cryptoService_.SetDefaultPassphrase(passphrase);
+    cryptoService_->SetDefaultPassphrase(passphrase);
 }
 
 
@@ -377,12 +389,12 @@ Error Repository::Initialize(const std::vector<std::string>& rootKeyIDs,
     // 如果提供了根密钥ID，使用这些ID获取密钥
     if (!rootKeyIDs.empty()) {
         for (const auto& keyID : rootKeyIDs) {
-            auto key = cryptoService_.GetKey(keyID);
+            auto key = cryptoService_->GetKey(keyID);
             rootKeys.push_back(key);
         }
     } else {
         // 如果没有提供根密钥ID，自动创建一个新的根密钥
-        auto publicKeyResult = cryptoService_.Create(RoleName::RootRole, gun_, ECDSA_KEY);
+        auto publicKeyResult = cryptoService_->Create(RoleName::RootRole, gun_, ECDSA_KEY);
         if (!publicKeyResult.ok()) {
             return Error("Failed to create root key: " + publicKeyResult.error().what());
         }
@@ -521,7 +533,7 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<crypto::PublicKey>
             continue; // 跳过timestamp角色，它只从远程获取
         }
         
-        auto publicKeyResult = cryptoService_.Create(role, gun_, ECDSA_KEY);
+        auto publicKeyResult = cryptoService_->Create(role, gun_, ECDSA_KEY);
         if (!publicKeyResult.ok()) {
             continue; // 跳过失败的密钥创建
         }
@@ -1403,7 +1415,15 @@ Error Repository::Publish() {
         // 推送更新到远程服务器 (对应Go的remote.SetMulti)
         if (remoteStore_) {
             for (const auto& [roleName, data] : updatedFiles) {
-                err = remoteStore_->SetRemote(gun_.empty() ? "default" : gun_, roleName, data);
+                // 将vector<uint8_t>转换为json对象
+                try {
+                    std::string jsonStr(data.begin(), data.end());
+                    json jsonData = json::parse(jsonStr);
+                    err = remoteStore_->SetRemote(gun_.empty() ? "default" : gun_, roleName, jsonData);
+                } catch (const json::exception& e) {
+                    return Error("Failed to parse metadata JSON for " + roleName + ": " + e.what());
+                }
+                
                 if (!err.ok()) {
                     return Error("Failed to publish " + roleName + " metadata: " + err.what());
                 }
@@ -1628,13 +1648,139 @@ Error Repository::updateTUF(bool force) {
 
 Error Repository::bootstrapRepo() {
     try {
-        // 尝试从本地缓存加载元数据
-        auto rootResult = cache_->Get(ROOT_ROLE);
-        if (!rootResult.ok()) {
-            return Error("Metadata not found");
+        utils::GetLogger().Debug("Loading trusted collection.");
+        
+        // 创建新的TUF Repo对象
+        tufRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
+        
+        // 定义基础角色列表（对应Go的data.BaseRoles）
+        std::vector<RoleName> baseRoles = {
+            RoleName::RootRole,
+            RoleName::TargetsRole,
+            RoleName::SnapshotRole,
+            RoleName::TimestampRole
+        };
+        
+        // 遍历所有基础角色并从缓存加载
+        for (const auto& role : baseRoles) {
+            std::string roleKey;
+            switch (role) {
+                case RoleName::RootRole:
+                    roleKey = ROOT_ROLE;
+                    break;
+                case RoleName::TargetsRole:
+                    roleKey = TARGETS_ROLE;
+                    break;
+                case RoleName::SnapshotRole:
+                    roleKey = SNAPSHOT_ROLE;
+                    break;
+                case RoleName::TimestampRole:
+                    roleKey = TIMESTAMP_ROLE;
+                    break;
+                default:
+                    continue;
+            }
+            
+            // 从缓存获取元数据
+            auto jsonBytesResult = cache_->Get(roleKey);
+            if (!jsonBytesResult.ok()) {
+                // 对于snapshot和timestamp角色，如果加载失败是可以接受的
+                // 因为支持服务器管理的snapshot和timestamp
+                if (role == RoleName::SnapshotRole || role == RoleName::TimestampRole) {
+                    utils::GetLogger().Debug("Skipping " + roleToString(role) + " - server managed role");
+                    continue;
+                }
+                return Error("Failed to load " + roleToString(role) + " from cache: " + jsonBytesResult.error().what());
+            }
+            
+            const auto& jsonBytes = jsonBytesResult.value();
+            
+            // 解析并加载元数据到TUF Repo
+            try {
+                std::string jsonStr(jsonBytes.begin(), jsonBytes.end());
+                json metadata = json::parse(jsonStr);
+                
+                // 根据角色类型加载到相应的结构
+                switch (role) {
+                    case RoleName::RootRole: {
+                        auto signedRoot = std::make_shared<tuf::SignedRoot>();
+                        signedRoot->fromJson(metadata);
+                        tufRepo_->SetRoot(signedRoot);
+                        break;
+                    }
+                    case RoleName::TargetsRole: {
+                        auto signedTargets = std::make_shared<tuf::SignedTargets>();
+                        if (metadata.contains("signed")) {
+                            signedTargets->Signed.fromJson(metadata["signed"]);
+                        } else {
+                            signedTargets->fromJson(metadata);
+                        }
+                        if (metadata.contains("signatures")) {
+                            signedTargets->Signatures.clear();
+                            for (const auto& sigJson : metadata["signatures"]) {
+                                tuf::Signature sig;
+                                sig.fromJson(sigJson);
+                                signedTargets->Signatures.push_back(sig);
+                            }
+                        }
+                        tufRepo_->SetTargets(signedTargets, RoleName::TargetsRole);
+                        break;
+                    }
+                    case RoleName::SnapshotRole: {
+                        auto signedSnapshot = std::make_shared<tuf::SignedSnapshot>();
+                        if (metadata.contains("signed")) {
+                            signedSnapshot->Signed.fromJson(metadata["signed"]);
+                        } else {
+                            signedSnapshot->fromJson(metadata);
+                        }
+                        if (metadata.contains("signatures")) {
+                            signedSnapshot->Signatures.clear();
+                            for (const auto& sigJson : metadata["signatures"]) {
+                                tuf::Signature sig;
+                                sig.fromJson(sigJson);
+                                signedSnapshot->Signatures.push_back(sig);
+                            }
+                        }
+                        tufRepo_->SetSnapshot(signedSnapshot);
+                        break;
+                    }
+                    case RoleName::TimestampRole: {
+                        auto signedTimestamp = std::make_shared<tuf::SignedTimestamp>();
+                        if (metadata.contains("signed")) {
+                            signedTimestamp->Signed.fromJson(metadata["signed"]);
+                        } else {
+                            signedTimestamp->fromJson(metadata);
+                        }
+                        if (metadata.contains("signatures")) {
+                            signedTimestamp->Signatures.clear();
+                            for (const auto& sigJson : metadata["signatures"]) {
+                                tuf::Signature sig;
+                                sig.fromJson(sigJson);
+                                signedTimestamp->Signatures.push_back(sig);
+                            }
+                        }
+                        tufRepo_->SetTimestamp(signedTimestamp);
+                        break;
+                    }
+                    default:
+                        break;
+                }
+                
+                utils::GetLogger().Debug("Successfully loaded " + roleToString(role) + " metadata");
+                
+            } catch (const json::exception& e) {
+                return Error("Failed to parse " + roleToString(role) + " metadata: " + e.what());
+            }
         }
         
-        return Error();
+        // 验证必需的元数据已加载
+        if (!tufRepo_->GetRoot()) {
+            return Error("Root metadata is required but not loaded");
+        }
+        
+        utils::GetLogger().Debug("Successfully bootstrapped repository from cache");
+        return Error(); // 成功
+        
     } catch (const std::exception& e) {
         return Error(std::string("Failed to bootstrap repository: ") + e.what());
     }
@@ -1689,13 +1835,13 @@ Result<std::vector<uint8_t>> Repository::resignMetadata(const std::vector<uint8_
         meta["signed"]["expires"] = std::chrono::system_clock::to_time_t(expiry);
         
         // 获取角色的所有密钥
-        auto keys = cryptoService_.ListKeys(roleName);
+        auto keys = cryptoService_->ListKeys(roleName);
         if (keys.empty()) {
             return Result<std::vector<uint8_t>>(Error("No keys found for role: " + role));
         }
         
         // 使用第一个密钥重新签名
-        auto keyResult = cryptoService_.GetPrivateKey(keys[0]);
+        auto keyResult = cryptoService_->GetPrivateKey(keys[0]);
         if (!keyResult.ok()) {
             return Result<std::vector<uint8_t>>(keyResult.error());
         }

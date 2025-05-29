@@ -112,7 +112,7 @@ public:
                     const std::vector<RoleName>& serverManagedRoles = {});
     
     // 获取加密服务
-    CryptoService& GetCryptoService() { return cryptoService_; }
+    std::shared_ptr<CryptoService> GetCryptoService() { return cryptoService_; }
     
     // 获取GUN
     const GUN& GetGUN() const { return gun_; }
@@ -180,7 +180,7 @@ private:
     std::shared_ptr<storage::FileSystemStorage> cache_;
     std::shared_ptr<storage::RemoteStore> remoteStore_;
     std::shared_ptr<changelist::Changelist> changelist_;
-    crypto::CryptoService cryptoService_;
+    std::shared_ptr<crypto::CryptoService> cryptoService_;
     std::shared_ptr<tuf::Repo> tufRepo_; // 元数据的内存表示
     std::shared_ptr<tuf::Repo> invalidRepo_; // 无效的元数据
 };

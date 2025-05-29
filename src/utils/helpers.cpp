@@ -172,7 +172,7 @@ Error changeTargetMeta(std::shared_ptr<tuf::Repo> repo,
     
     try {
         if (action == changelist::ActionCreate) {
-            utils::GetLogger().Debug("Changelist add", utils::LogContext()
+            utils::GetLogger().Info("Changelist add", utils::LogContext()
                 .With("path", path));
             
             // 解析FileMeta (对应Go的json.Unmarshal(c.Content(), meta))
@@ -181,6 +181,9 @@ Error changeTargetMeta(std::shared_ptr<tuf::Repo> repo,
             
             tuf::FileMeta meta;
             meta.fromJson(metaJson);
+
+            utils::GetLogger().Info("FileMeta", utils::LogContext()
+                .With("filemeta", meta.toJson().dump()));
             
             // 创建Files映射 (对应Go的files := data.Files{c.Path(): *meta})
             std::map<std::string, tuf::FileMeta> files;

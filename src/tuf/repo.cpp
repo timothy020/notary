@@ -70,9 +70,9 @@ json FileMeta::toJson() const {
     
     json hashes;
     for (const auto& [algo, hash] : Hashes) {
-        hashes[algo] = hash;
+        hashes[algo] = utils::HexEncode(hash);
     }
-    j["hashes"] = utils::Base64Encode(hashes);
+    j["hashes"] = hashes;
     
     if (!Custom.is_null()) {
         j["custom"] = Custom;
@@ -85,8 +85,17 @@ void FileMeta::fromJson(const json& j) {
     Length = j.at("length").get<int64_t>();
     
     if (j.contains("hashes")) {
-        for (const auto& [algo, hashStr] : j.at("hashes").items()) {
-            Hashes[algo] = utils::Base64Decode(hashStr.get<std::string>());
+        Hashes.clear();
+        for (const auto& [algo, hashValue] : j.at("hashes").items()) {
+            // 根据JSON中存储的类型来解析哈希值
+            if (hashValue.is_string()) {
+                // 如果是字符串，假设是十六进制编码
+                std::string hashStr = hashValue.get<std::string>();
+                Hashes[algo] = utils::HexDecode(hashStr);
+            } else if (hashValue.is_array()) {
+                // 如果是数组，直接转换为vector<uint8_t>
+                Hashes[algo] = hashValue.get<std::vector<uint8_t>>();
+            }
         }
     }
     
@@ -120,10 +129,22 @@ json DelegationRole::toJson() const {
 
 void DelegationRole::fromJson(const json& j) {
     Name = stringToRole(j.at("name").get<std::string>());
-    // 注意：这里需要从外部设置BaseRoleInfo，因为需要密钥信息
+    
+    // 解析threshold（如果存在）
+    int threshold = 1; // 默认值
+    if (j.contains("threshold")) {
+        threshold = j.at("threshold").get<int>();
+    }
+    
+    // 解析paths
     if (j.contains("paths")) {
         Paths = j.at("paths").get<std::vector<std::string>>();
     }
+    
+    // 注意：BaseRoleInfo需要在外部设置，因为需要密钥信息
+    // 这里只设置基本信息，密钥信息由调用者在Delegations::fromJson中设置
+    std::vector<std::shared_ptr<crypto::PublicKey>> emptyKeys;
+    BaseRoleInfo = BaseRole(Name, threshold, emptyKeys);
 }
 
 // Delegations 实现
@@ -133,7 +154,7 @@ json Delegations::toJson() const {
     json keys;
     for (const auto& [keyId, key] : Keys) {
         json keyJson;
-        keyJson["keytype"] = "ecdsa"; // 简化处理
+        keyJson["keytype"] = key->Algorithm();
         keyJson["keyval"] = json::object();
         keyJson["keyval"]["public"] = utils::Base64Encode(key->Public());
         keys[keyId] = keyJson;
@@ -150,12 +171,73 @@ json Delegations::toJson() const {
 }
 
 void Delegations::fromJson(const json& j) {
-    // 注意：密钥反序列化需要特殊处理，这里简化
+    // 解析keys
+    if (j.contains("keys")) {
+        Keys.clear();
+        const auto& keysJson = j.at("keys");
+        
+        for (const auto& [keyId, keyJson] : keysJson.items()) {
+            try {
+                // 解析密钥类型
+                std::string keyType;
+                if (keyJson.contains("keytype")) {
+                    keyType = keyJson.at("keytype").get<std::string>();
+                } else {
+                    continue; // 跳过没有keytype的密钥
+                }
+                
+                // 解析公钥数据
+                std::vector<uint8_t> publicData;
+                if (keyJson.contains("keyval") && keyJson["keyval"].contains("public")) {
+                    std::string publicStr = keyJson["keyval"]["public"].get<std::string>();
+                    publicData = utils::Base64Decode(publicStr);
+                } else {
+                    continue; // 跳过没有公钥数据的密钥
+                }
+                
+                // 创建公钥对象
+                auto publicKey = crypto::NewPublicKey(keyType, publicData);
+                if (publicKey) {
+                    Keys[keyId] = publicKey;
+                }
+                
+            } catch (const std::exception& e) {
+                // 跳过解析失败的密钥
+                continue;
+            }
+        }
+    }
+    
+    // 解析roles
     if (j.contains("roles")) {
+        Roles.clear();
         for (const auto& roleJson : j.at("roles")) {
-            DelegationRole role;
-            role.fromJson(roleJson);
-            Roles.push_back(role);
+            try {
+                DelegationRole role;
+                role.fromJson(roleJson);
+                
+                // 需要根据解析的keyids从Keys中构建BaseRoleInfo
+                if (roleJson.contains("keyids") && roleJson.contains("threshold")) {
+                    std::vector<std::shared_ptr<crypto::PublicKey>> roleKeys;
+                    const auto& keyidsJson = roleJson.at("keyids");
+                    for (const auto& keyidJson : keyidsJson) {
+                        std::string keyId = keyidJson.get<std::string>();
+                        auto keyIt = Keys.find(keyId);
+                        if (keyIt != Keys.end()) {
+                            roleKeys.push_back(keyIt->second);
+                        }
+                    }
+                    
+                    int threshold = roleJson.at("threshold").get<int>();
+                    BaseRole baseRole(role.Name, threshold, roleKeys);
+                    role.BaseRoleInfo = baseRole;
+                }
+                
+                Roles.push_back(role);
+            } catch (const std::exception& e) {
+                // 跳过解析失败的角色
+                continue;
+            }
         }
     }
 }
@@ -203,14 +285,81 @@ void Root::fromJson(const json& j) {
         ConsistentSnapshot = j.at("consistent_snapshot").get<bool>();
     }
     
-    // 解析keys（简化处理）
+    // 解析keys
     if (j.contains("keys")) {
-        // 需要从外部提供密钥解析逻辑
+        Keys.clear();
+        const auto& keysJson = j.at("keys");
+        
+        for (const auto& [keyId, keyJson] : keysJson.items()) {
+            try {
+                // 解析密钥类型
+                std::string keyType;
+                if (keyJson.contains("keytype")) {
+                    keyType = keyJson.at("keytype").get<std::string>();
+                } else {
+                    continue; // 跳过没有keytype的密钥
+                }
+                
+                // 解析公钥数据
+                std::vector<uint8_t> publicData;
+                if (keyJson.contains("keyval") && keyJson["keyval"].contains("public")) {
+                    std::string publicStr = keyJson["keyval"]["public"].get<std::string>();
+                    publicData = utils::Base64Decode(publicStr);
+                } else {
+                    continue; // 跳过没有公钥数据的密钥
+                }
+                
+                // 创建公钥对象
+                auto publicKey = crypto::NewPublicKey(keyType, publicData);
+                if (publicKey) {
+                    Keys[keyId] = publicKey;
+                }
+                
+            } catch (const std::exception& e) {
+                // 跳过解析失败的密钥
+                continue;
+            }
+        }
     }
     
-    // 解析roles（简化处理）
+    // 解析roles
     if (j.contains("roles")) {
-        // 需要从外部提供角色解析逻辑
+        Roles.clear();
+        const auto& rolesJson = j.at("roles");
+        
+        for (const auto& [roleNameStr, roleJson] : rolesJson.items()) {
+            try {
+                // 解析角色名
+                RoleName roleName = stringToRole(roleNameStr);
+                
+                // 解析threshold
+                int threshold = 1; // 默认值
+                if (roleJson.contains("threshold")) {
+                    threshold = roleJson.at("threshold").get<int>();
+                }
+                
+                // 解析keyids并构建密钥列表
+                std::vector<std::shared_ptr<crypto::PublicKey>> roleKeys;
+                if (roleJson.contains("keyids")) {
+                    const auto& keyidsJson = roleJson.at("keyids");
+                    for (const auto& keyidJson : keyidsJson) {
+                        std::string keyId = keyidJson.get<std::string>();
+                        auto keyIt = Keys.find(keyId);
+                        if (keyIt != Keys.end()) {
+                            roleKeys.push_back(keyIt->second);
+                        }
+                    }
+                }
+                
+                // 创建BaseRole对象
+                BaseRole baseRole(roleName, threshold, roleKeys);
+                Roles[roleName] = baseRole;
+                
+            } catch (const std::exception& e) {
+                // 跳过解析失败的角色
+                continue;
+            }
+        }
     }
 }
 
@@ -237,7 +386,19 @@ void Targets::fromJson(const json& j) {
     Common.fromJson(j);
     
     if (j.contains("targets")) {
-        // 简化处理
+        targets.clear();
+        const auto& targetsJson = j.at("targets");
+        
+        for (const auto& [name, metaJson] : targetsJson.items()) {
+            try {
+                FileMeta meta;
+                meta.fromJson(metaJson);
+                targets[name] = meta;
+            } catch (const std::exception& e) {
+                // 跳过解析失败的目标
+                continue;
+            }
+        }
     }
     
     if (j.contains("delegations")) {
@@ -263,7 +424,19 @@ void Snapshot::fromJson(const json& j) {
     Common.fromJson(j);
     
     if (j.contains("meta")) {
-        // 简化处理
+        Meta.clear();
+        const auto& metaJson = j.at("meta");
+        
+        for (const auto& [name, fileMetaJson] : metaJson.items()) {
+            try {
+                FileMeta fileMeta;
+                fileMeta.fromJson(fileMetaJson);
+                Meta[name] = fileMeta;
+            } catch (const std::exception& e) {
+                // 跳过解析失败的元数据
+                continue;
+            }
+        }
     }
 }
 
@@ -285,30 +458,41 @@ void Timestamp::fromJson(const json& j) {
     Common.fromJson(j);
     
     if (j.contains("meta")) {
-        // 简化处理
+        Meta.clear();
+        const auto& metaJson = j.at("meta");
+        
+        for (const auto& [name, fileMetaJson] : metaJson.items()) {
+            try {
+                FileMeta fileMeta;
+                fileMeta.fromJson(fileMetaJson);
+                Meta[name] = fileMeta;
+            } catch (const std::exception& e) {
+                // 跳过解析失败的元数据
+                continue;
+            }
+        }
     }
 }
 
 // SignedRoot 实现
 json SignedRoot::toJson() const {
-    return Signed.toJson();
+    json j;
+    j["signed"] = Signed.toJson();
+    j["signatures"] = json::array();
+    for (const auto& sig : Signatures) {
+        j["signatures"].push_back(sig.toJson());
+    }
+    return j;
 }
 
 void SignedRoot::fromJson(const json& j) {
-    Signed.fromJson(j);
-}
-
-json SignedRoot::toSignedJson() const {
-    json j;
-    j["signed"] = Signed.toJson();
-    
-    json signatures = json::array();
-    for (const auto& sig : Signatures) {
-        signatures.push_back(sig.toJson());
+    Signed.fromJson(j["signed"]);
+    Signatures.clear();
+    for (const auto& sigJson : j["signatures"]) {
+        Signature sig;
+        sig.fromJson(sigJson);
+        Signatures.push_back(sig);
     }
-    j["signatures"] = signatures;
-    
-    return j;
 }
 
 // SignedRoot ToSigned 方法 - 对应Go版本的ToSigned
@@ -335,7 +519,7 @@ Result<std::shared_ptr<notary::tuf::Signed>> SignedRoot::ToSigned() const {
 }
 
 std::vector<uint8_t> SignedRoot::Serialize() const {
-    std::string jsonStr = toSignedJson().dump();
+    std::string jsonStr = toJson().dump();
     return std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
 }
 
@@ -343,20 +527,7 @@ bool SignedRoot::Deserialize(const std::vector<uint8_t>& data) {
     try {
         std::string jsonStr(data.begin(), data.end());
         json j = json::parse(jsonStr);
-        
-        if (j.contains("signed")) {
-            Signed.fromJson(j["signed"]);
-        }
-        
-        if (j.contains("signatures")) {
-            Signatures.clear();
-            for (const auto& sigJson : j["signatures"]) {
-                Signature sig;
-                sig.fromJson(sigJson);
-                Signatures.push_back(sig);
-            }
-        }
-        
+        fromJson(j);
         return true;
     } catch (const std::exception&) {
         return false;
@@ -674,7 +845,7 @@ bool DelegationRole::CheckPaths(const std::string& path) const {
 }
 
 // Repo 实现
-Repo::Repo(crypto::CryptoService& cryptoService) 
+Repo::Repo(std::shared_ptr<crypto::CryptoService> cryptoService) 
     : cryptoService_(cryptoService) {
 }
 
@@ -905,7 +1076,7 @@ Error Repo::VerifyCanSign(RoleName roleName) const {
     
     // 检查是否至少有一个可用的私钥
     for (const auto& key : role.Keys()) {
-        auto privateKeyResult = cryptoService_.GetPrivateKey(key->ID());
+        auto privateKeyResult = cryptoService_->GetPrivateKey(key->ID());
         if (privateKeyResult.ok()) {
             return Error(); // 找到可用的私钥
         }
@@ -949,14 +1120,18 @@ Error Repo::VerifyCanSign(RoleName roleName) const {
 // }
 
 Error Repo::AddTargets(RoleName role, const std::map<std::string, FileMeta>& targets) {
-    // 验证是否可以签名该角色
-    auto cantSignErr = VerifyCanSign(role);
+    // TODO: 验证是否可以签名该角色
+    auto cantSignErr = Error(); //VerifyCanSign(role);
     bool needSign = false;
     
     // 检查角色的元数据是否存在
     auto targetsMetadata = GetTargets(role);
+    utils::GetLogger().Info("targetsMetadata", utils::LogContext()
+        .With("targetsMetadata", targetsMetadata->toJson().dump()));
     if (!targetsMetadata) {
         // 如果不存在则创建
+        utils::GetLogger().Info("TargetsMetadata not found for role", utils::LogContext()
+            .With("role", roleToString(role)));
         auto initResult = InitTargets(role);
         if (!initResult.ok()) {
             return initResult.error();
@@ -971,14 +1146,29 @@ Error Repo::AddTargets(RoleName role, const std::map<std::string, FileMeta>& tar
         return [&, targetPath, targetMeta](std::shared_ptr<SignedTargets> tgt, const DelegationRole& validRole) -> WalkResult {
             // 检查目标是否已经存在且相同
             auto existingMeta = tgt->GetMeta(targetPath);
-            if (existingMeta && existingMeta->equals(targetMeta)) {
-                // 目标已存在且相同，添加到成功列表
-                addedTargets[targetPath] = targetMeta;
-                return StopWalk{}; // StopWalk equivalent
+            if (existingMeta) {
+                utils::GetLogger().Info("existingMeta", utils::LogContext()
+                    .With("existingMeta", existingMeta->toJson().dump()));
+                utils::GetLogger().Info("targetMeta", utils::LogContext()
+                    .With("targetMeta", targetMeta.toJson().dump()));
+                if (existingMeta->equals(targetMeta)) {
+                    // 目标已存在且相同，添加到成功列表
+                    utils::GetLogger().Info("target already exists and is the same", utils::LogContext()
+                        .With("targetPath", targetPath));
+                    addedTargets[targetPath] = targetMeta;
+                    return StopWalk{}; // StopWalk equivalent
+                }
+            } else {
+                utils::GetLogger().Info("existingMeta is null", utils::LogContext()
+                    .With("targetPath", targetPath));
+                utils::GetLogger().Info("targetMeta", utils::LogContext()
+                    .With("targetMeta", targetMeta.toJson().dump()));
             }
             
             needSign = true;
             if (cantSignErr.ok()) {
+                utils::GetLogger().Info("add target to metadata", utils::LogContext()
+                    .With("targetPath", targetPath));
                 // 添加目标到元数据
                 tgt->AddTarget(targetPath, targetMeta);
                 // 添加到成功列表
@@ -990,15 +1180,18 @@ Error Repo::AddTargets(RoleName role, const std::map<std::string, FileMeta>& tar
     
     // 遍历所有目标并添加
     for (const auto& [path, target] : targets) {
+        utils::GetLogger().Info("Begin walk targets", utils::LogContext()
+            .With("path", path));
         auto walkErr = WalkTargets(path, role, addTargetVisitor(path, target));
         if (!walkErr.ok()) {
             return walkErr;
         }
-        
+       
         if (needSign && !cantSignErr.ok()) {
             return cantSignErr;
         }
     }
+    utils::GetLogger().Info("End walk targets", utils::LogContext());
     
     // 检查是否所有目标都添加成功
     if (addedTargets.size() != targets.size()) {
@@ -1675,6 +1868,24 @@ Result<FileMeta> NewFileMeta(const std::vector<uint8_t>& data,
 
 // Signed 结构体方法实现
 std::vector<uint8_t> Signed::Serialize() const {
+    json j = toJson();
+    
+    std::string result = j.dump();
+    return std::vector<uint8_t>(result.begin(), result.end());
+}
+
+bool Signed::Deserialize(const std::vector<uint8_t>& data) {
+    try {
+        std::string jsonStr(data.begin(), data.end());
+        json j = json::parse(jsonStr);
+        fromJson(j);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+json Signed::toJson() const {
     json j;
     j["signatures"] = json::array();
     for (const auto& sig : Signatures) {
@@ -1686,47 +1897,30 @@ std::vector<uint8_t> Signed::Serialize() const {
         std::string jsonStr(signedData.begin(), signedData.end());
         j["signed"] = json::parse(jsonStr);
     }
-    
-    std::string result = j.dump();
-    return std::vector<uint8_t>(result.begin(), result.end());
-}
-
-bool Signed::Deserialize(const std::vector<uint8_t>& data) {
-    try {
-        std::string jsonStr(data.begin(), data.end());
-        json j = json::parse(jsonStr);
-        
-        if (j.contains("signatures")) {
-            Signatures.clear();
-            for (const auto& sigJson : j["signatures"]) {
-                Signature sig;
-                sig.fromJson(sigJson);
-                Signatures.push_back(sig);
-            }
-        }
-        
-        if (j.contains("signed")) {
-            std::string signedStr = j["signed"].dump();
-            signedData = std::vector<uint8_t>(signedStr.begin(), signedStr.end());
-        }
-        
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
-}
-
-json Signed::toJson() const {
-    if (!signedData.empty()) {
-        std::string jsonStr(signedData.begin(), signedData.end());
-        return json::parse(jsonStr);
-    }
-    return json::object();
+    return j;
+    // if (!signedData.empty()) {
+    //     std::string jsonStr(signedData.begin(), signedData.end());
+    //     return json::parse(jsonStr);
+    // }
+    // return json::object();
 }
 
 void Signed::fromJson(const json& j) {
-    std::string jsonStr = j.dump();
-    signedData = std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
+    if (j.contains("signatures")) {
+        Signatures.clear();
+        for (const auto& sigJson : j["signatures"]) {
+            Signature sig;
+            sig.fromJson(sigJson);
+            Signatures.push_back(sig);
+        }
+    }
+    
+    if (j.contains("signed")) {
+        std::string signedStr = j["signed"].dump();
+        signedData = std::vector<uint8_t>(signedStr.begin(), signedStr.end());
+    }
+    // std::string jsonStr = j.dump();
+    // signedData = std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
 }
 
 } // namespace tuf

@@ -6,6 +6,8 @@
 #include "notary/crypto/crypto_service.hpp"
 #include "notary/utils/logger.hpp"
 #include "server/storage/file_storage.hpp"
+#include "notary/storage/key_storage.hpp"
+#include "notary/types.hpp"
 
 int main(int argc, char* argv[]) {
     CLI::App app{"Notary服务器 - TUF元数据管理"};
@@ -13,8 +15,7 @@ int main(int argc, char* argv[]) {
     std::string addr = "localhost:4443";
     std::string keyAlgorithm = "ecdsa";
     std::vector<std::string> repoPrefixes;
-    std::string trustDir = ".";
-    std::string storagePath = "./data";
+    std::string trustDir = "./server";
     
     // 日志配置
     std::string logLevel = "info";
@@ -27,7 +28,6 @@ int main(int argc, char* argv[]) {
     app.add_option("--key-algorithm", keyAlgorithm, "密钥算法, 支持: ecdsa, rsa, ed25519");
     app.add_option("--repo-prefix", repoPrefixes, "仓库前缀, 可多次指定");
     app.add_option("--trust-dir", trustDir, "信任数据目录");
-    app.add_option("--storage", storagePath, "元数据存储路径，测试脚本生成的元数据存放在 ./data");
     
     // 添加日志配置选项
     app.add_option("--log-level", logLevel, "日志级别: debug, info, warn, error, fatal, panic");
@@ -51,7 +51,6 @@ int main(int argc, char* argv[]) {
             .With("addr", addr)
             .With("keyAlgorithm", keyAlgorithm)
             .With("trustDir", trustDir)
-            .With("storagePath", storagePath)
             .With("logLevel", logLevel)
             .With("logFormat", logFormat)
             .With("logOutput", logOutput));
@@ -67,11 +66,19 @@ int main(int argc, char* argv[]) {
     }
     
     // 创建加密服务
-    notary::crypto::CryptoService cryptoService;
-    cryptoService.SetDefaultPassphrase("server");
+    auto passRetriever = [](const std::string& keyName,
+                                  const std::string& alias,
+                                  bool createNew,
+                                  int attempts) -> std::tuple<std::string, bool, notary::Error> {
+        // 返回空密码（""），不放弃（false），无错误（Error()）
+        return std::make_tuple("", false, notary::Error());
+    };
+    auto keyStores = notary::storage::GenericKeyStore::NewKeyFileStore(trustDir+"/private", passRetriever);
+    notary::crypto::CryptoService cryptoService(std::vector<std::shared_ptr<notary::storage::GenericKeyStore>>{std::move(keyStores)});
+    // cryptoService.SetDefaultPassphrase("server");
     
     // 创建文件存储服务
-    notary::server::storage::FileStorageService storageService(storagePath);
+    notary::server::storage::FileStorageService storageService(trustDir+"/tuf");
     
     // 创建服务器配置
     notary::server::Config config;

@@ -24,7 +24,7 @@ private:
 };
 
 // 主要的Sign函数
-Error Sign(CryptoService& service, std::shared_ptr<tuf::Signed> s, 
+Error Sign(std::shared_ptr<CryptoService> service, std::shared_ptr<tuf::Signed> s, 
           const std::vector<std::shared_ptr<PublicKey>>& signingKeys,
           int minSignatures, 
           const std::vector<std::shared_ptr<PublicKey>>& otherWhitelistedKeys = {});

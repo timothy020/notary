@@ -128,10 +128,51 @@ std::vector<std::string> FileSystemStorage::ListFiles() {
             return files;
         }
         
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(baseDir_)) {
-            if (entry.is_regular_file()) {
-                std::string relativePath = std::filesystem::relative(entry.path(), baseDir_).string();
-                files.push_back(relativePath);
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                baseDir_, 
+                std::filesystem::directory_options::skip_permission_denied)) {
+            
+            try {
+                // 忽略目录
+                if (entry.is_directory()) {
+                    continue;
+                }
+                
+                // 忽略符号链接
+                if (entry.is_symlink()) {
+                    continue;
+                }
+                
+                // 只处理常规文件
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                
+                std::string fileName = entry.path().filename().string();
+                
+                // 检查文件是否匹配扩展名模式 (*ext_)
+                if (!ext_.empty()) {
+                    if (fileName.length() < ext_.length() || 
+                        fileName.substr(fileName.length() - ext_.length()) != ext_) {
+                        continue; // 不匹配扩展名，跳过
+                    }
+                }
+                
+                // 计算相对路径
+                std::filesystem::path relativePath = std::filesystem::relative(entry.path(), baseDir_);
+                std::string relativePathStr = relativePath.string();
+                
+                // 去掉扩展名（如果有）
+                if (!ext_.empty() && relativePathStr.length() >= ext_.length()) {
+                    relativePathStr = relativePathStr.substr(0, relativePathStr.length() - ext_.length());
+                }
+                
+                files.push_back(relativePathStr);
+                
+            } catch (const std::exception& e) {
+                // 忽略单个文件的错误，继续处理其他文件
+                // 这与Go版本的行为一致
+                continue;
             }
         }
     } catch (const std::exception& e) {
