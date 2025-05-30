@@ -16,6 +16,8 @@ add_library(notary_lib
     crypto/crypto_service.cpp
     crypto/keys.cpp
     crypto/sign.cpp
+    crypto/verify.cpp
+    crypto/verifiers.cpp
     main.cpp
     repository.cpp
     storage/metadata_store.cpp
@@ -32,6 +34,7 @@ add_library(notary_lib
     types.cpp
     server_main.cpp
     tuf/repo.cpp
+    tuf/builder.cpp
 )
 
 # 设置包含目录

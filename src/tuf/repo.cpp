@@ -1289,6 +1289,15 @@ Error Repo::WalkTargets(const std::string& targetPath, RoleName rolePath,
     return Error();
 }
 
+bool isValidSnapshot(const Snapshot& snapshot) {
+    // TODO: 实现snapshot结构验证
+    return true;
+}
+bool isValidTimestamp(const Timestamp& timestamp) {
+    // TODO: 实现timestamp结构验证
+    return true;
+}
+
 // 委托管理方法实现
 Error Repo::UpdateDelegationKeys(RoleName roleName, const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys, 
                                  const std::vector<std::string>& removeKeys, int newThreshold) {
@@ -1827,6 +1836,31 @@ Result<std::shared_ptr<SignedTimestamp>> NewTimestamp(const std::shared_ptr<Sign
     newTimestamp->Dirty = true;
     
     return Result<std::shared_ptr<SignedTimestamp>>(newTimestamp);
+}
+
+// 检查哈希结构的有效性 - 对应Go版本的CheckValidHashStructures
+Error CheckValidHashStructures(const std::map<std::string, std::vector<uint8_t>>& hashes) {
+    int cnt = 0;
+    
+    for (const auto& [alg, hash] : hashes) {
+        if (alg == "sha256") {
+            if (hash.size() != SHA256_DIGEST_LENGTH) {
+                return Error("Invalid sha256 checksum");
+            }
+            cnt++;
+        } else if (alg == "sha512") {
+            if (hash.size() != SHA512_DIGEST_LENGTH) {
+                return Error("Invalid sha512 checksum");
+            }
+            cnt++;
+        }
+    }
+    
+    if (cnt == 0) {
+        return Error("at least one supported hash needed");
+    }
+    
+    return Error(); // 成功
 }
 
 // NewFileMeta 函数实现

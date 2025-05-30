@@ -268,6 +268,10 @@ using WalkResult = std::variant<std::monostate, StopWalk, Error>;
 // 访问者函数类型
 using WalkVisitorFunc = std::function<WalkResult(std::shared_ptr<SignedTargets>, const DelegationRole&)>;
 
+// 验证方法
+bool isValidSnapshot(const Snapshot& snapshot);
+bool isValidTimestamp(const Timestamp& timestamp);
+
 // TUF Repo类 - 元数据的内存表示
 class Repo {
 public:
@@ -289,6 +293,10 @@ public:
     std::shared_ptr<SignedTimestamp> GetTimestamp() const { return timestamp_; }
     void SetTimestamp(std::shared_ptr<SignedTimestamp> timestamp) { timestamp_ = timestamp; }
     
+    // 获取CryptoService
+    std::shared_ptr<crypto::CryptoService> GetCryptoService() const { return cryptoService_; }
+    void SetOriginalRootRole(const BaseRole& originalRootRole) { originalRootRole_ = originalRootRole; }
+
     // 初始化方法
     Result<std::shared_ptr<SignedRoot>> InitRoot(const BaseRole& root, const BaseRole& targets, 
                   const BaseRole& snapshot, const BaseRole& timestamp);
@@ -390,6 +398,9 @@ std::chrono::time_point<std::chrono::system_clock> iso8601ToTime(const std::stri
 // 辅助函数：创建FileMeta对象
 Result<FileMeta> NewFileMeta(const std::vector<uint8_t>& data, 
                             const std::vector<std::string>& hashAlgorithms = {"sha256","sha512"});
+
+// 辅助函数：检查哈希结构的有效性
+Error CheckValidHashStructures(const std::map<std::string, std::vector<uint8_t>>& hashes);
 
 } // namespace tuf
 } // namespace notary 
