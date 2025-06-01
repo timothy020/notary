@@ -70,7 +70,8 @@ json FileMeta::toJson() const {
     
     json hashes;
     for (const auto& [algo, hash] : Hashes) {
-        hashes[algo] = utils::HexEncode(hash);
+        // 使用base64编码哈希值，而不是十六进制，与Go版本兼容
+        hashes[algo] = utils::Base64Encode(hash);
     }
     j["hashes"] = hashes;
     
@@ -89,9 +90,22 @@ void FileMeta::fromJson(const json& j) {
         for (const auto& [algo, hashValue] : j.at("hashes").items()) {
             // 根据JSON中存储的类型来解析哈希值
             if (hashValue.is_string()) {
-                // 如果是字符串，假设是十六进制编码
+                // 如果是字符串，首先尝试base64解码（与Go版本兼容）
                 std::string hashStr = hashValue.get<std::string>();
-                Hashes[algo] = utils::HexDecode(hashStr);
+                try {
+                    Hashes[algo] = utils::Base64Decode(hashStr);
+                } catch (const std::exception& e) {
+                    // 如果base64解码失败，尝试十六进制解码作为后备
+                    try {
+                        Hashes[algo] = utils::HexDecode(hashStr);
+                    } catch (const std::exception& hex_e) {
+                        // 如果都失败了，跳过这个哈希值
+                        utils::GetLogger().Warn("Failed to decode hash", utils::LogContext()
+                            .With("algorithm", algo)
+                            .With("value", hashStr));
+                        continue;
+                    }
+                }
             } else if (hashValue.is_array()) {
                 // 如果是数组，直接转换为vector<uint8_t>
                 Hashes[algo] = hashValue.get<std::vector<uint8_t>>();

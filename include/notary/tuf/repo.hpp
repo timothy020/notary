@@ -284,7 +284,7 @@ public:
     
     std::shared_ptr<SignedTargets> GetTargets(RoleName role) const;
     void SetTargets(std::shared_ptr<SignedTargets> targets, RoleName role = RoleName::TargetsRole);
-    std::map<RoleName, std::shared_ptr<SignedTargets>> GetTargets() const { return targets_; }
+    std::map<RoleName, std::shared_ptr<SignedTargets>>& GetTargets() { return targets_; }
     void SetTargets(std::map<RoleName, std::shared_ptr<SignedTargets>> targets) { targets_ = targets; }
     
     std::shared_ptr<SignedSnapshot> GetSnapshot() const { return snapshot_; }
