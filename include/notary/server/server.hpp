@@ -59,6 +59,7 @@ public:
 struct Request {
     // 文件上传结构
     struct File {
+        std::string field_name;  // 添加字段名
         std::string filename;
         std::string content_type;
         std::string content;
@@ -69,7 +70,7 @@ struct Request {
     std::map<std::string, std::string> headers;
     std::string body;
     std::map<std::string, std::string> params; // 路径参数
-    std::map<std::string, File> files; // 上传的文件
+    std::vector<File> files; // 改为vector以支持多个同名字段
 };
 
 struct Response {

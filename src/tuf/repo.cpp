@@ -7,6 +7,8 @@
 #include <sstream>
 #include <iomanip>
 #include <variant>
+#include <cstdlib>  // 添加：for setenv, unsetenv
+#include <ctime>    // 添加：for tzset, timegm
 #include <openssl/evp.h>
 #include <openssl/bio.h>
 #include <openssl/ec.h>
@@ -21,14 +23,18 @@ namespace tuf {
 std::string timeToISO8601(const std::chrono::time_point<std::chrono::system_clock>& time) {
     auto time_t = std::chrono::system_clock::to_time_t(time);
     std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time_t), "%Y-%m-%dT%H:%M:%SZ");
+    // 使用本地时间而不是UTC时间，移除Z后缀
+    ss << std::put_time(std::localtime(&time_t), "%Y-%m-%dT%H:%M:%S");
     return ss.str();
 }
 
 std::chrono::time_point<std::chrono::system_clock> iso8601ToTime(const std::string& timeStr) {
     std::tm tm = {};
     std::istringstream ss(timeStr);
-    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    // 解析本地时间格式（不带Z后缀）
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    
+    // 使用本地时间转换（mktime假设输入是本地时间）
     return std::chrono::system_clock::from_time_t(std::mktime(&tm));
 }
 
@@ -1140,8 +1146,6 @@ Error Repo::AddTargets(RoleName role, const std::map<std::string, FileMeta>& tar
     
     // 检查角色的元数据是否存在
     auto targetsMetadata = GetTargets(role);
-    utils::GetLogger().Info("targetsMetadata", utils::LogContext()
-        .With("targetsMetadata", targetsMetadata->toJson().dump()));
     if (!targetsMetadata) {
         // 如果不存在则创建
         utils::GetLogger().Info("TargetsMetadata not found for role", utils::LogContext()
@@ -1151,6 +1155,12 @@ Error Repo::AddTargets(RoleName role, const std::map<std::string, FileMeta>& tar
             return initResult.error();
         }
         targetsMetadata = GetTargets(role);
+    }
+    
+    // 现在记录元数据（在确保非空之后）
+    if (targetsMetadata) {
+        utils::GetLogger().Info("targetsMetadata", utils::LogContext()
+            .With("targetsMetadata", targetsMetadata->toJson().dump()));
     }
     
     std::map<std::string, FileMeta> addedTargets;

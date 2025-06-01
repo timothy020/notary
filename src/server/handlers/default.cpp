@@ -5,18 +5,13 @@
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
 #include "notary/utils/logger.hpp"
+#include "notary/server/types.hpp"
+#include "notary/server/handlers/validation.hpp"
 
 namespace notary {
 namespace server {
 namespace handlers {
 
-// 定义用于元数据更新的结构体
-struct MetaUpdate {
-    RoleName role;
-    std::string roleName;
-    int version;
-    std::string data;
-};
 
 // 主页处理程序
 Error MainHandler(const Context& ctx, Response& resp) {
@@ -205,17 +200,18 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
     std::vector<MetaUpdate> updates;
     
     try {
-        // 处理所有上传的文件
-        for (const auto& [field_name, file] : ctx.request.files) {
+        // 处理所有上传的文件 - 类似Go版本的for循环处理每个part
+        for (const auto& file : ctx.request.files) {
+            // 只处理字段名为"files"的文件
+            if (file.field_name != "files") {
+                continue;
+            }
+            
             // 获取文件名
             const std::string& filename = file.filename;
             
-            // 去除.json后缀获取角色名
+            // 角色名直接是文件名（Go版本修复后，文件名就是角色名）
             std::string roleName = filename;
-            size_t jsonSuffix = roleName.rfind(".json");
-            if (jsonSuffix != std::string::npos) {
-                roleName = roleName.substr(0, jsonSuffix);
-            }
             
             // 验证角色名是否有效
             if (roleName.empty()) {
@@ -269,7 +265,7 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
                 
                 utils::GetLogger().Debug("解析元数据成功", 
                     utils::LogContext()
-                        .With("field", field_name)
+                        .With("field", file.field_name)
                         .With("filename", filename)
                         .With("role", roleName)
                         .With("version", std::to_string(version)));
@@ -284,40 +280,64 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
         }
         
         // 验证更新
-        // TODO: 实现validateUpdate函数，验证元数据签名和版本
-        // 这里应该有类似Go代码中validateUpdate的实现
-        // 验证失败时应该返回适当的错误
-        
-        // 一次性更新所有元数据
-        for (const auto& update : updates) {
-            auto result = ctx.storageService->StoreMetadata(gun, update.role, update.roleName, update.data);
-            if (!result.ok()) {
-                // 处理版本冲突
-                // 假设Error::ErrOldVersion是版本冲突错误码
-                if (result.error().what().find("Old version") != std::string::npos) {
-                    utils::GetLogger().Info("版本冲突", 
+        try {
+            auto validatedUpdates = handlers::validateUpdate(ctx.cryptoService, gun, updates, ctx.storageService);
+            
+            utils::GetLogger().Info("元数据验证成功", 
+                utils::LogContext()
+                    .With("gun", gun)
+                    .With("validated_updates_count", std::to_string(validatedUpdates.size())));
+            
+            // 一次性更新所有验证后的元数据（包括生成的snapshot和timestamp）
+            for (const auto& update : validatedUpdates) {
+                auto result = ctx.storageService->StoreMetadata(gun, update.role, update.roleName, update.data);
+                if (!result.ok()) {
+                    // 处理版本冲突
+                    if (result.error().what().find("Old version") != std::string::npos) {
+                        utils::GetLogger().Info("版本冲突", 
+                            utils::LogContext()
+                                .With("gun", gun)
+                                .With("role", update.roleName));
+                        return Error(8, "版本冲突: " + result.error().what()); // ErrOldVersion
+                    }
+                    
+                    utils::GetLogger().Error("存储元数据失败", 
                         utils::LogContext()
                             .With("gun", gun)
-                            .With("role", update.roleName));
-                    return Error(8, "版本冲突: " + result.error().what()); // ErrOldVersion
+                            .With("role", update.roleName)
+                            .With("error", result.error().what()));
+                    return Error(9, "更新失败: " + result.error().what()); // ErrUpdating
                 }
-                
-                utils::GetLogger().Error("存储元数据失败", 
+            }
+            
+            // 记录更新信息
+            for (const auto& update : validatedUpdates) {
+                utils::GetLogger().Info("更新元数据成功", 
                     utils::LogContext()
                         .With("gun", gun)
                         .With("role", update.roleName)
-                        .With("error", result.error().what()));
-                return Error(9, "更新失败: " + result.error().what()); // ErrUpdating
+                        .With("version", std::to_string(update.version)));
             }
-        }
-        
-        // 记录更新信息
-        for (const auto& update : updates) {
-            utils::GetLogger().Info("更新元数据成功", 
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("验证元数据更新失败", 
                 utils::LogContext()
                     .With("gun", gun)
-                    .With("role", update.roleName)
-                    .With("version", std::to_string(update.version)));
+                    .With("error", e.what()));
+            
+            // 根据错误类型返回适当的错误代码
+            std::string errorMsg = e.what();
+            if (errorMsg.find("Bad root") != std::string::npos) {
+                return Error(10, "根元数据验证失败: " + errorMsg);
+            } else if (errorMsg.find("Bad targets") != std::string::npos) {
+                return Error(11, "目标元数据验证失败: " + errorMsg);
+            } else if (errorMsg.find("Bad snapshot") != std::string::npos) {
+                return Error(12, "快照元数据验证失败: " + errorMsg);
+            } else if (errorMsg.find("Bad hierarchy") != std::string::npos) {
+                return Error(13, "元数据层次结构验证失败: " + errorMsg);
+            } else {
+                return Error(8, "验证失败: " + errorMsg); // ErrInvalidUpdate
+            }
         }
         
         // 返回成功响应

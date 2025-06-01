@@ -282,12 +282,13 @@ void Server::handleHttpRequest(const std::string& method, const httplib::Request
                 .With("内容类型", file.content_type)
                 .With("内容长度", std::to_string(file.content.length())));
         
-        // 将文件内容和文件名添加到请求中
-        request.files[field_name] = {
+        // 将文件内容和文件名添加到请求中 - 使用vector以支持多个同名字段
+        request.files.push_back({
+            field_name,        // 添加字段名
             file.filename,
             file.content_type,
             file.content
-        };
+        });
     }
     
     // 转换headers

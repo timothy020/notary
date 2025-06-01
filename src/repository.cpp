@@ -1340,6 +1340,7 @@ Error Repository::Publish() {
                 std::string(err.what()).find("repository does not exist") != std::string::npos) {
                 
                 // 尝试从本地缓存加载 (对应Go的r.bootstrapRepo())
+                utils::GetLogger().Info("尝试从本地缓存加载", utils::LogContext().With("gun", gun_.empty() ? "default" : gun_));
                 err = bootstrapRepo();
                 if (!err.ok() && (std::string(err.what()).find("Metadata not found") != std::string::npos ||
                                  std::string(err.what()).find("not found") != std::string::npos)) {
@@ -1415,20 +1416,30 @@ Error Repository::Publish() {
         
         // 推送更新到远程服务器 (对应Go的remote.SetMulti)
         if (remoteStore_) {
+            // 准备批量上传的元数据map - 对应Go版本的SetMulti
+            std::map<std::string, json> metasToUpload;
+            
             for (const auto& [roleName, data] : updatedFiles) {
                 // 将vector<uint8_t>转换为json对象
                 try {
                     std::string jsonStr(data.begin(), data.end());
                     json jsonData = json::parse(jsonStr);
-                    err = remoteStore_->SetRemote(gun_.empty() ? "default" : gun_, roleName, jsonData);
+                    metasToUpload[roleName] = jsonData;
                 } catch (const json::exception& e) {
                     return Error("Failed to parse metadata JSON for " + roleName + ": " + e.what());
                 }
-                
-                if (!err.ok()) {
-                    return Error("Failed to publish " + roleName + " metadata: " + err.what());
-                }
             }
+            
+            // 使用SetMulti一次性上传所有元数据，保持服务器一致性
+            err = remoteStore_->SetMulti(gun_.empty() ? "default" : gun_, metasToUpload);
+            if (!err.ok()) {
+                return Error("Failed to publish metadata using SetMulti: " + err.what());
+            }
+            
+            utils::GetLogger().Info("成功批量发布元数据", 
+                utils::LogContext()
+                    .With("gun", gun_.empty() ? "default" : gun_)
+                    .With("files_count", std::to_string(metasToUpload.size())));
         }
         
         // 清除changelist (对应Go的r.changelist.Clear(""))

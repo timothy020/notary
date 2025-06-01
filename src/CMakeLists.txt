@@ -25,6 +25,7 @@ add_library(notary_lib
     storage/storage.cpp
     server/server.cpp
     server/handlers/default.cpp
+    server/handlers/validation.cpp
     server/errors/errors.cpp
     server/storage/file_storage.cpp
     utils/logger.cpp

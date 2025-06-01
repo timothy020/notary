@@ -49,7 +49,7 @@ public:
     // 序列化的内容，changelist的解释器可以使用它来应用变更
     // 对于TUF，这将是需要插入或合并的序列化JSON
     // 在"delete"动作的情况下，它将为空
-    virtual std::vector<uint8_t> Content() const = 0;
+    virtual const std::vector<uint8_t>& Content() const = 0;
 
     // 序列化当前变更为json
     virtual std::vector<uint8_t> Serialize() const = 0;
@@ -111,8 +111,8 @@ public:
     std::string Scope() const override { return scope_; }
     std::string Type() const override { return type_; }
     std::string Path() const override { return path_; }
-    std::vector<uint8_t> Content() const override { return content_; }
-    std::vector<uint8_t> Serialize() const override;
+    const std::vector<uint8_t>& Content() const override { return content_; }
+    std::vector<uint8_t>  Serialize() const override;
 };
 
 // TUFRootData - 用于root角色变更的数据结构

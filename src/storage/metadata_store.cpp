@@ -316,9 +316,9 @@ Error RemoteStore::SetRemote(const std::string& gun, const std::string& role, co
     struct curl_mime* mime = curl_mime_init(curl);
     struct curl_mimepart* part = curl_mime_addpart(mime);
     
-    // 设置文件名和表单字段名
+    // 设置文件名和表单字段名 - 对应Go版本的CreateFormFile("files", role)
     curl_mime_name(part, "files");
-    curl_mime_filename(part, (role + "." + metaExtension_).c_str());
+    curl_mime_filename(part, role.c_str()); // 文件名直接是角色名，不加扩展名
     
     // 设置内容类型
     curl_mime_type(part, "application/json");
@@ -355,6 +355,70 @@ Error RemoteStore::SetRemote(const std::string& gun, const std::string& role, co
     
     // 处理HTTP状态码
     return translateStatusToError(httpCode, "POST metadata");
+}
+
+// 批量发布多个元数据到远程 - 对应Go版本的SetMulti
+Error RemoteStore::SetMulti(const std::string& gun, const std::map<std::string, json>& metas) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return Error("Failed to initialize CURL");
+    }
+    
+    // 构建URL - 对应Go版本的buildMetaURL("")
+    std::string url = serverURL_ + "/v2/" + gun + "/_trust/tuf/";
+    
+    // 设置CURL选项
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L); // 启用SSL验证
+    curl_easy_setopt(curl, CURLOPT_POST, 1L); // 设置为POST请求
+    
+    // 准备multipart/form-data - 对应Go版本的NewMultiPartMetaRequest
+    struct curl_mime* mime = curl_mime_init(curl);
+    
+    // 为每个元数据文件添加一个part
+    for (const auto& [role, data] : metas) {
+        struct curl_mimepart* part = curl_mime_addpart(mime);
+        
+        // 设置文件名和表单字段名 - 对应Go版本的CreateFormFile("files", role)
+        curl_mime_name(part, "files");
+        curl_mime_filename(part, role.c_str()); // 文件名直接是角色名，不加扩展名
+        
+        // 设置内容类型
+        curl_mime_type(part, "application/json");
+        
+        // 设置数据
+        std::string dataStr = data.dump();
+        curl_mime_data(part, dataStr.c_str(), dataStr.size());
+    }
+    
+    // 设置multipart表单
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
+    
+    // 响应缓冲区
+    std::string responseBuffer;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
+    
+    // 执行请求 - 对应Go版本的roundTrip.RoundTrip(req)
+    CURLcode res = curl_easy_perform(curl);
+    
+    // 清理mime资源
+    curl_mime_free(mime);
+    
+    // 检查请求是否成功
+    if (res != CURLE_OK) {
+        std::string errorMsg = curl_easy_strerror(res);
+        curl_easy_cleanup(curl);
+        return Error("CURL request failed: " + errorMsg);
+    }
+    
+    // 获取HTTP状态码
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_cleanup(curl);
+    
+    // 处理HTTP状态码 - 对应Go版本的translateStatusToError(resp, "POST metadata endpoint")
+    return translateStatusToError(httpCode, "POST metadata endpoint");
 }
 
 } // namespace storage

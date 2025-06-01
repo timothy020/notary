@@ -259,7 +259,8 @@ Error applyRootRoleChange(std::shared_ptr<tuf::Repo> repo,
     try {
         if (action == changelist::ActionCreate) {
             // 解析TUFRootData (对应Go的json.Unmarshal(c.Content(), d))
-            std::string contentStr(change->Content().begin(), change->Content().end());
+            const auto& contentBytes = change->Content();
+            std::string contentStr(contentBytes.begin(), contentBytes.end());
             nlohmann::json rootDataJson = nlohmann::json::parse(contentStr);
             
             // 解析角色名 (对应Go的d.RoleName)

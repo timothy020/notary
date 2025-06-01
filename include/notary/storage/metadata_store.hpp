@@ -56,6 +56,10 @@ public:
                    const std::string& role,
                    const json& data);
     
+    // 批量发布多个元数据到远程 - 对应Go版本的SetMulti
+    Error SetMulti(const std::string& gun,
+                  const std::map<std::string, json>& metas);
+
 private:
     std::string serverURL_;
     std::string metaExtension_;
