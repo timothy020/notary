@@ -226,9 +226,6 @@ private:
     Error validateChecksumsFromTimestamp(std::shared_ptr<SignedTimestamp> ts);
     Error validateChecksumsFromSnapshot(std::shared_ptr<SignedSnapshot> sn);
     Error validateChecksumFor(const std::vector<uint8_t>& content, RoleName roleName);
-    Error checkHashes(const std::vector<uint8_t>& content, 
-                     const std::string& roleName,
-                     const std::map<std::string, std::vector<uint8_t>>& expectedHashes);
     
     // 字节转换和验证方法
     Result<std::shared_ptr<Signed>> bytesToSigned(const std::vector<uint8_t>& content, 

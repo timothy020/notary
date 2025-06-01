@@ -147,6 +147,9 @@ public:
                                    const std::string& targetPath,
                                    const json& customData = {});
     
+    // 通过名称获取目标 (对应Go的GetTargetByName)
+    Result<Target> GetTargetByName(const std::string& targetName);
+
 private:
 
     // 应用changelist

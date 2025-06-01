@@ -887,7 +887,7 @@ Result<std::shared_ptr<Signed>> RepoBuilderImpl::bytesToSignedAndValidateSigs(co
 Error RepoBuilderImpl::validateChecksumFor(const std::vector<uint8_t>& content, RoleName roleName) {
     // 对于root角色，如果有bootstrapped checksum，则首先验证它
     if (roleName == RoleName::RootRole && bootstrappedRootChecksum_) {
-        Error err = checkHashes(content, roleToString(roleName), bootstrappedRootChecksum_->Hashes);
+        Error err = utils::CheckHashes(content, roleToString(roleName), bootstrappedRootChecksum_->Hashes);
         if (err.hasError()) {
             return err;
         }
@@ -897,7 +897,7 @@ Error RepoBuilderImpl::validateChecksumFor(const std::vector<uint8_t>& content, 
     // （以确保仓库中的所有内容都是自一致的）
     auto checksums = getChecksumsFor(roleName);
     if (checksums) { // 不同于空，在这种情况下哈希检查应该失败
-        Error err = checkHashes(content, roleToString(roleName), *checksums);
+        Error err = utils::CheckHashes(content, roleToString(roleName), *checksums);
         if (err.hasError()) {
             return err;
         }
@@ -910,42 +910,6 @@ Error RepoBuilderImpl::validateChecksumFor(const std::vector<uint8_t>& content, 
     return Error(); // 成功
 }
 
-// 辅助方法：检查哈希值
-Error RepoBuilderImpl::checkHashes(const std::vector<uint8_t>& content, 
-                                  const std::string& roleName,
-                                  const std::map<std::string, std::vector<uint8_t>>& expectedHashes) {
-    if (expectedHashes.empty()) {
-        return Error("No hashes provided for role: " + roleName);
-    }
-    
-    // 检查SHA256哈希
-    auto sha256It = expectedHashes.find("sha256");
-    if (sha256It != expectedHashes.end()) {
-        auto sha256Result = utils::CalculateSHA256Hash(content);
-        if (!sha256Result.ok()) {
-            return Error("Failed to calculate SHA256 hash: " + sha256Result.error().what());
-        }
-        
-        if (sha256It->second != sha256Result.value()) {
-            return Error("SHA256 checksum mismatch for role: " + roleName);
-        }
-    }
-    
-    // 检查SHA512哈希（如果存在）
-    auto sha512It = expectedHashes.find("sha512");
-    if (sha512It != expectedHashes.end()) {
-        auto sha512Result = utils::CalculateSHA512Hash(content);
-        if (!sha512Result.ok()) {
-            return Error("Failed to calculate SHA512 hash: " + sha512Result.error().what());
-        }
-        
-        if (sha512It->second != sha512Result.value()) {
-            return Error("SHA512 checksum mismatch for role: " + roleName);
-        }
-    }
-    
-    return Error(); // 成功
-}
 
 std::shared_ptr<std::map<std::string, std::vector<uint8_t>>> RepoBuilderImpl::getChecksumsFor(RoleName role) const {
     std::map<std::string, std::vector<uint8_t>> hashes;
@@ -991,7 +955,7 @@ Error RepoBuilderImpl::validateChecksumsFromTimestamp(std::shared_ptr<SignedTime
         // 到这一点，SignedTimestamp已经被验证，所以它必须有snapshot哈希
         auto snMetaIt = ts->Signed.Meta.find(roleToString(RoleName::SnapshotRole));
         if (snMetaIt != ts->Signed.Meta.end()) {
-            Error err = checkHashes(it->second, roleToString(RoleName::SnapshotRole), snMetaIt->second.Hashes);
+            Error err = utils::CheckHashes(it->second, roleToString(RoleName::SnapshotRole), snMetaIt->second.Hashes);
             if (err.hasError()) {
                 return err;
             }
@@ -1020,7 +984,7 @@ Error RepoBuilderImpl::validateChecksumsFromSnapshot(std::shared_ptr<SignedSnaps
         // 查找该角色在snapshot中的元数据
         auto metaIt = sn->Signed.Meta.find(roleToString(roleName));
         if (metaIt != sn->Signed.Meta.end()) {
-            Error err = checkHashes(loadedBytes, roleToString(roleName), metaIt->second.Hashes);
+            Error err = utils::CheckHashes(loadedBytes, roleToString(roleName), metaIt->second.Hashes);
             if (err.hasError()) {
                 return err;
             }

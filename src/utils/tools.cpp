@@ -98,6 +98,43 @@ Result<std::vector<uint8_t>> _CalculateSHAHash(const std::vector<uint8_t>& data,
     return std::vector<uint8_t>(hash, hash + hashLen);
 }
 
+// 辅助方法：检查哈希值
+Error CheckHashes(const std::vector<uint8_t>& content, 
+                                  const std::string& roleName,
+                                  const std::map<std::string, std::vector<uint8_t>>& expectedHashes) {
+    if (expectedHashes.empty()) {
+        return Error("No hashes provided for role: " + roleName);
+    }
+    
+    // 检查SHA256哈希
+    auto sha256It = expectedHashes.find("sha256");
+    if (sha256It != expectedHashes.end()) {
+        auto sha256Result = utils::CalculateSHA256Hash(content);
+        if (!sha256Result.ok()) {
+            return Error("Failed to calculate SHA256 hash: " + sha256Result.error().what());
+        }
+        
+        if (sha256It->second != sha256Result.value()) {
+            return Error("SHA256 checksum mismatch for role: " + roleName);
+        }
+    }
+    
+    // 检查SHA512哈希（如果存在）
+    auto sha512It = expectedHashes.find("sha512");
+    if (sha512It != expectedHashes.end()) {
+        auto sha512Result = utils::CalculateSHA512Hash(content);
+        if (!sha512Result.ok()) {
+            return Error("Failed to calculate SHA512 hash: " + sha512Result.error().what());
+        }
+        
+        if (sha512It->second != sha512Result.value()) {
+            return Error("SHA512 checksum mismatch for role: " + roleName);
+        }
+    }
+    
+    return Error(); // 成功
+}
+
 std::string HexEncode(const std::vector<uint8_t>& data) {
     std::stringstream ss;
     ss << std::hex;

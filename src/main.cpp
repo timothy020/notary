@@ -331,6 +331,101 @@ int main(int argc, char** argv) {
         }
     });
     
+    // verify 命令
+    auto verify = app.add_subcommand("verify", "Verifies the content of a target against its trusted metadata");
+    std::string targetFilePath; // 要验证的文件路径
+    
+    verify->add_option("gun", gun, "Globally Unique Name")->required();
+    verify->add_option("target_name", targetName, "Target name to verify")->required();
+    verify->add_option("target_file", targetFilePath, "Path to the target file to verify")->required();
+    verify->add_option("--password,--passphrase", password, "Password for key encryption");
+    
+    verify->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Verifying target in GUN: " + gun, utils::LogContext()
+                    .With("target", targetName)
+                    .With("file", targetFilePath));
+            }
+            
+            // 设置默认密码（如果未提供）
+            if (password.empty()) {
+                password = "changeme";  // 默认密码
+                utils::GetLogger().Warn("Using default password. Please change it for production use.");
+            }
+            
+            // 2. 检查目标文件是否存在
+            if (!fs::exists(targetFilePath)) {
+                utils::GetLogger().Error("Target file not found: " + targetFilePath);
+                return;
+            }
+            
+            // 3. 读取目标文件内容作为payload
+            std::vector<uint8_t> payload;
+            try {
+                std::ifstream file(targetFilePath, std::ios::binary | std::ios::ate);
+                if (!file) {
+                    utils::GetLogger().Error("Failed to open target file: " + targetFilePath);
+                    return;
+                }
+                
+                auto size = file.tellg();
+                file.seekg(0, std::ios::beg);
+                
+                payload.resize(size);
+                if (!file.read(reinterpret_cast<char*>(payload.data()), size)) {
+                    utils::GetLogger().Error("Failed to read target file: " + targetFilePath);
+                    return;
+                }
+            } catch (const std::exception& e) {
+                utils::GetLogger().Error("Error reading target file: " + std::string(e.what()));
+                return;
+            }
+            
+            // 4. 创建仓库实例
+            Repository repo(gun, trustDir, serverURL);
+            repo.SetPassphrase(password);
+            
+            // 5. 通过名称获取目标信息
+            auto targetResult = repo.GetTargetByName(targetName);
+            if (!targetResult.ok()) {
+                utils::GetLogger().Error("Error retrieving target by name: " + targetResult.error().what());
+                return;
+            }
+            
+            auto target = targetResult.value();
+            
+            // 6. 验证哈希值
+            auto hashErr = utils::CheckHashes(payload, targetName, target.hashes);
+            if (!hashErr.ok()) {
+                utils::GetLogger().Error("Data not present in the trusted collection: " + hashErr.what());
+                return;
+            }
+            
+            // 7. 验证成功
+            utils::GetLogger().Info("Successfully verified target \"" + targetName + "\" in repository \"" + gun + "\"");
+            utils::GetLogger().Info("Target file matches trusted metadata", utils::LogContext()
+                .With("file", targetFilePath)
+                .With("size", std::to_string(target.length))
+                .With("hash_algorithms", std::to_string(target.hashes.size())));
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {

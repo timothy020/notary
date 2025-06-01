@@ -935,4 +935,92 @@ Error Repository::bootstrapRepo() {
     return Error();
 }
 
+// GetTargetByName - 通过目标名称获取目标信息 (对应Go的GetTargetByName)
+Result<Target> Repository::GetTargetByName(const std::string& targetName) {
+    try {
+        // 首先更新TUF元数据
+        auto updateErr = updateTUF(false);
+        if (!updateErr.ok()) {
+            // 如果远程更新失败，尝试从本地缓存加载
+            auto bootstrapErr = bootstrapRepo();
+            if (!bootstrapErr.ok()) {
+                return Error("Failed to load repository: " + updateErr.what() + " and " + bootstrapErr.what());
+            }
+        }
+        
+        if (!tufRepo_) {
+            return Error("TUF repository not initialized");
+        }
+        
+        // === 原始实现（直接访问targets角色） ===
+        // // 获取targets角色的元数据
+        // auto targetsMap = tufRepo_->GetTargets();
+        // auto targetsIt = targetsMap.find(RoleName::TargetsRole);
+        // if (targetsIt == targetsMap.end()) {
+        //     return Error("Targets role not found in repository");
+        // }
+        // 
+        // auto targetsRole = targetsIt->second;
+        // if (!targetsRole) {
+        //     return Error("Targets role object is null");
+        // }
+        // 
+        // // 在targets中查找指定的目标
+        // auto targetFiles = targetsRole->Signed.targets;
+        // auto targetIt = targetFiles.find(targetName);
+        // if (targetIt == targetFiles.end()) {
+        //     return Error("Target not found: " + targetName);
+        // }
+        // 
+        // const auto& fileMeta = targetIt->second;
+        
+        // === 新实现（使用WalkTargets方式，对应Go版本） ===
+        // 用于存储查找结果的变量
+        tuf::FileMeta resultMeta;
+        bool foundTarget = false;
+        
+        // 定义访问者函数来查找指定的目标 (对应Go的getTargetVisitorFunc)
+        tuf::WalkVisitorFunc getTargetVisitorFunc = [&](std::shared_ptr<tuf::SignedTargets> tgt, const tuf::DelegationRole& validRole) -> tuf::WalkResult {
+            if (!tgt) {
+                return std::monostate{}; // 返回nil等价物
+            }
+            
+            // 在目标中查找指定名称的文件 (对应Go的tgt.Signed.Targets[name])
+            auto targetIt = tgt->Signed.targets.find(targetName);
+            if (targetIt != tgt->Signed.targets.end()) {
+                // 找到目标，设置结果变量并停止遍历
+                resultMeta = targetIt->second;
+                foundTarget = true;
+                return tuf::StopWalk{}; // 停止遍历
+            }
+            
+            return std::monostate{}; // 继续遍历
+        };
+        
+        // 执行遍历，从TargetsRole开始查找 (对应Go的r.tufRepo.WalkTargets)
+        auto walkErr = tufRepo_->WalkTargets(targetName, RoleName::TargetsRole, getTargetVisitorFunc);
+        
+        // 检查是否找到目标且没有错误
+        if (!walkErr.ok()) {
+            return Error("Error walking targets: " + walkErr.what());
+        }
+        
+        if (!foundTarget) {
+            return Error("Target not found: " + targetName);
+        }
+        
+        // 构造Target对象
+        Target target;
+        target.name = targetName;
+        target.hashes = resultMeta.Hashes;
+        target.length = resultMeta.Length;
+        target.custom = resultMeta.Custom;
+        
+        return target;
+        
+    } catch (const std::exception& e) {
+        return Error("Failed to get target by name: " + std::string(e.what()));
+    }
+}
+
 } // namespace notary 

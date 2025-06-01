@@ -24,6 +24,10 @@ Result<std::vector<uint8_t>> _CalculateSHAHash(const std::vector<uint8_t>& data,
 Result<std::vector<uint8_t>> CalculateSHA256Hash(const std::vector<uint8_t>& data);
 // 计算数据的SHA-512哈希
 Result<std::vector<uint8_t>> CalculateSHA512Hash(const std::vector<uint8_t>& data);
+// 检查哈希值
+Error CheckHashes(const std::vector<uint8_t>& content, 
+                  const std::string& roleName,
+                  const std::map<std::string, std::vector<uint8_t>>& expectedHashes);   
 
 // 将字节数组转换为十六进制字符串
 std::string HexEncode(const std::vector<uint8_t>& data);
