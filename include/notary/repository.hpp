@@ -148,11 +148,6 @@ public:
                                    const json& customData = {});
     
 private:
-    // 初始化TUF元数据
-    // Error initializeTUFMetadata(const BaseRole& root,
-    //                           const BaseRole& targets,
-    //                           const BaseRole& snapshot,
-    //                           const BaseRole& timestamp);
 
     // 应用changelist
     Error applyChangelist();
@@ -162,16 +157,6 @@ private:
 
     // 签署targets
     Error signTargets(std::map<std::string, std::vector<uint8_t>>& updates, bool initialPublish);
-    
-    // 检查元数据是否需要重新签名
-    bool needsResigning(const std::vector<uint8_t>& metadata); //
-    
-    // 重新签名元数据
-    Result<std::vector<uint8_t>> resignMetadata(const std::vector<uint8_t>& metadata,  //
-                                              const std::string& role);
-    
-    // 初始化Snapshot
-    Error initializeSnapshot(); //
 
 private:
     GUN gun_;
