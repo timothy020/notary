@@ -13,7 +13,7 @@ namespace fs = std::filesystem;
 Error loadConfig(const std::string& configFile, std::string& trustDir, std::string& serverURL) {
     // 如果没有指定配置文件，使用默认值
     if (trustDir.empty()) {
-        trustDir = fs::current_path().string() + "/trust";
+        trustDir = fs::current_path().string() + "/trust/";
     }
     
     if (serverURL.empty()) {

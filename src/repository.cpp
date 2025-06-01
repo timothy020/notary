@@ -338,8 +338,8 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     : gun_(gun)
     , trustDir_(trustDir)
     , serverURL_(serverURL)
-    , changelist_(std::make_shared<changelist::FileChangelist>(trustDir+"/changelist"))
-    , cache_(std::make_shared<storage::FileSystemStorage>(trustDir+"/tuf", ".json"))
+    , changelist_(std::make_shared<changelist::FileChangelist>(trustDir+gun_+"/changelist"))
+    , cache_(std::make_shared<storage::FileSystemStorage>(trustDir+gun_+"/tuf", ".json"))
     , remoteStore_(std::make_shared<storage::RemoteStore>(serverURL))
     {
     // 初始化cryptoService_
