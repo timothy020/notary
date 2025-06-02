@@ -128,7 +128,7 @@ Result<bool> FileStorageService::StoreMetadata(const std::string& gun, RoleName 
         std::string checksum = calculateChecksum(data);
         
         // 确保目录存在
-        std::string dirPath = baseDir_ + "/tuf/" + gun + "/";
+        std::string dirPath = baseDir_ + gun + "/";
         ensureDirectoryExists(dirPath);
         
         // 保存版本文件
@@ -219,7 +219,7 @@ std::string FileStorageService::calculateChecksum(const std::string& data) const
 
 std::string FileStorageService::buildMetadataPath(const std::string& gun, const std::string& role, 
                                               int version, const std::string& checksum) const {
-    std::string basePath = baseDir_ + "/tuf/" + gun + "/";
+    std::string basePath = baseDir_  + gun + "/";
     
     if (!checksum.empty()) {
         return basePath + role + "." + checksum + ".json";
@@ -231,7 +231,7 @@ std::string FileStorageService::buildMetadataPath(const std::string& gun, const 
 }
 
 Result<int> FileStorageService::getLatestVersion(const std::string& gun, const std::string& role) const {
-    std::string dirPath = baseDir_ + "/tuf/" + gun + "/";
+    std::string dirPath = baseDir_ + gun + "/";
     if (!fs::exists(dirPath)) {
         return Result<int>(notary::Error("Directory not found: " + dirPath));
     }

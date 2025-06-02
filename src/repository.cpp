@@ -6,6 +6,7 @@
 #include "notary/utils/helpers.hpp"
 #include "notary/changelist/changelist.hpp"
 #include "notary/storage/key_storage.hpp"
+#include "notary/storage/metadata_store.hpp"
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -94,8 +95,8 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     : gun_(gun)
     , trustDir_(trustDir)
     , serverURL_(serverURL)
-    , changelist_(std::make_shared<changelist::FileChangelist>(trustDir+gun_+"/changelist"))
-    , cache_(std::make_shared<storage::FileSystemStorage>(trustDir+gun_+"/tuf", ".json"))
+    , changelist_(std::make_shared<changelist::FileChangelist>(trustDir+"/tuf/"+gun_+"/changelist"))
+    , cache_(std::make_shared<storage::FileSystemStorage>(trustDir+"/tuf/"+gun_+"/metadata", ".json"))
     , remoteStore_(std::make_shared<storage::RemoteStore>(serverURL))
     {
     // 初始化cryptoService_
@@ -850,23 +851,35 @@ Error Repository::updateTUF(bool force) {
             return Error("Repository not found");
         }
         
+        // 将 JSON 对象转换为字节数组
+        std::string rootJsonStr = rootResult.value().dump();
+        std::vector<uint8_t> rootData(rootJsonStr.begin(), rootJsonStr.end());
+
         // 更新本地缓存
-        auto err = cache_->Set(ROOT_ROLE, rootResult.value());
+        auto err = cache_->Set(ROOT_ROLE, rootData);
         if (!err.ok()) {
             return err;
         }
         
         // 获取并更新其他角色的元数据
-        std::vector<std::string> roles = {"targets", "snapshot"};
+        std::vector<std::string> roles = {"targets", "snapshot", "timestamp"};
         for (const auto& role : roles) {
             auto result = remoteStore_->GetRemote(gunStr, role);
             if (result.ok()) {
-                std::string roleKey = role == "targets" ? TARGETS_ROLE : SNAPSHOT_ROLE;
-                err = cache_->Set(roleKey, result.value());
+                std::string roleKey = role == "targets" ? TARGETS_ROLE : role == "snapshot" ? SNAPSHOT_ROLE : TIMESTAMP_ROLE;
+                std::string roleJsonStr = result.value().dump();
+                std::vector<uint8_t> roleData(roleJsonStr.begin(), roleJsonStr.end());
+                err = cache_->Set(roleKey, roleData);
                 if (!err.ok()) {
                     return err;
                 }
             }
+        }
+
+        // 然后从本地缓存加载到Repo
+        err = bootstrapRepo();
+        if(!err.ok()) {
+            utils::GetLogger().Info("updateTUF failed!", utils::LogContext().With("error", err.what()));
         }
         
         return Error();
@@ -1021,6 +1034,64 @@ Result<Target> Repository::GetTargetByName(const std::string& targetName) {
     } catch (const std::exception& e) {
         return Error("Failed to get target by name: " + std::string(e.what()));
     }
+}
+
+// 删除信任数据 (对应Go的DeleteTrustData)
+Error Repository::DeleteTrustData(const std::string& baseDir, const GUN& gun, 
+                                 const std::string& serverURL, bool deleteRemote) {
+    // 构建本地仓库路径 (对应Go的filepath.Join(baseDir, tufDir, filepath.FromSlash(gun.String())))
+    std::string localRepo = baseDir + "tuf/" + gun;
+    utils::GetLogger().Info("删除路径", utils::LogContext().With("localRepo", localRepo));
+    
+    // 删除本地TUF仓库数据目录，包括本地TUF元数据文件和changelist信息
+    // (对应Go的os.RemoveAll(localRepo))
+    try {
+        if (fs::exists(localRepo)) {
+            fs::remove_all(localRepo);
+            utils::GetLogger().Info("Local trust data deleted", 
+                utils::LogContext()
+                    .With("gun", gun)
+                    .With("localPath", localRepo));
+        }
+    } catch (const std::exception& e) {
+        return Error(std::string("Error clearing TUF repo data: ") + e.what());
+    }
+    
+    // 如果需要删除远程数据 (对应Go的deleteRemote检查)
+    if (deleteRemote && !serverURL.empty()) {
+        utils::GetLogger().Info("Deleting remote trust data", 
+            utils::LogContext()
+                .With("gun", gun)
+                .With("serverURL", serverURL));
+        
+        try {
+            // 创建远程存储客户端 (对应Go的getRemoteStore)
+            // 构建URL: baseURL + "/v2/" + gun.String() + "/_trust/tuf/"
+            std::string remoteURL = serverURL + "/v2/" + gun + "/_trust/tuf/";
+            auto remoteStore = std::make_shared<storage::RemoteStore>(remoteURL);
+            
+            // 删除远程数据 (对应Go的remote.RemoveAll())
+            auto result = remoteStore->RemoveAll();
+            if (!result.ok()) {
+                utils::GetLogger().Error("Failed to delete remote trust data", 
+                    utils::LogContext()
+                        .With("gun", gun)
+                        .With("serverURL", serverURL)
+                        .With("error", result.error().what()));
+                return result.error();
+            }
+            
+            utils::GetLogger().Info("Remote trust data deleted successfully", 
+                utils::LogContext()
+                    .With("gun", gun)
+                    .With("serverURL", serverURL));
+                    
+        } catch (const std::exception& e) {
+            return Error(std::string("Unable to instantiate a remote store: ") + e.what());
+        }
+    }
+    
+    return Error(); // 成功
 }
 
 } // namespace notary 

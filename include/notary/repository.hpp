@@ -150,6 +150,11 @@ public:
     // 通过名称获取目标 (对应Go的GetTargetByName)
     Result<Target> GetTargetByName(const std::string& targetName);
 
+    // 删除信任数据 (对应Go的DeleteTrustData)
+    static Error DeleteTrustData(const std::string& baseDir, const GUN& gun, 
+                                const std::string& serverURL = "", 
+                                bool deleteRemote = false);
+
 private:
 
     // 应用changelist

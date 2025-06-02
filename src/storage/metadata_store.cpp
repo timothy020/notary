@@ -421,5 +421,51 @@ Error RemoteStore::SetMulti(const std::string& gun, const std::map<std::string, 
     return translateStatusToError(httpCode, "POST metadata endpoint");
 }
 
+// 删除GUN的所有远程元数据 (对应Go版本的RemoveAll)
+Result<bool> RemoteStore::RemoveAll() const {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return Result<bool>(Error("Failed to initialize CURL"));
+    }
+    
+    // 构建URL，空的元数据路径表示删除所有 (对应Go的buildMetaURL(""))
+    std::string url = serverURL_;
+    
+    // 设置CURL选项为DELETE请求 (对应Go的http.NewRequest("DELETE", url.String(), nil))
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");  // 设置DELETE方法
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L); // 启用SSL验证
+    
+    // 接收响应数据的字符串
+    std::string responseBuffer;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
+    
+    // 执行请求 (对应Go的s.roundTrip.RoundTrip(req))
+    CURLcode res = curl_easy_perform(curl);
+    
+    // 检查请求是否成功
+    if (res != CURLE_OK) {
+        std::string errorMsg = curl_easy_strerror(res);
+        curl_easy_cleanup(curl);
+        return Result<bool>(Error("CURL DELETE request failed: " + errorMsg));
+    }
+    
+    // 获取HTTP状态码
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_cleanup(curl);
+    
+    // 处理HTTP状态码 (对应Go的translateStatusToError)
+    Error httpError = translateStatusToError(httpCode, "DELETE metadata for GUN endpoint");
+    if (!httpError.ok()) {
+        return Result<bool>(httpError);
+    }
+    
+    // 删除成功
+    return Result<bool>(true);
+}
+
 } // namespace storage
 } // namespace notary 

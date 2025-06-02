@@ -426,6 +426,56 @@ int main(int argc, char** argv) {
         }
     });
     
+    // delete 命令 - 删除GUN的信任数据 (对应Go的tufDeleteGUN)
+    auto deleteCmd = app.add_subcommand("delete", "Deletes trust data for a repository");
+    bool deleteRemote = false;
+    
+    deleteCmd->add_option("gun", gun, "Globally Unique Name")->required();
+    deleteCmd->add_flag("--remote", deleteRemote, "Delete remote trust data as well as local");
+    
+    deleteCmd->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+            }
+            
+            // 2. 准备删除信息文本
+            std::string remoteDeleteInfo = deleteRemote ? " and remote" : "";
+            
+            utils::GetLogger().Info("Deleting trust data for repository " + gun);
+            
+            // 3. 调用Repository的静态删除方法 (对应Go的notaryclient.DeleteTrustData)
+            auto deleteErr = Repository::DeleteTrustData(
+                trustDir,           // baseDir
+                gun,               // gun  
+                serverURL,         // URL
+                deleteRemote       // deleteRemote
+            );
+            
+            if (!deleteErr.ok()) {
+                utils::GetLogger().Error("Error deleting trust data: " + deleteErr.what());
+                return;
+            }
+            
+            // 4. 成功删除日志 (对应Go的成功日志)
+            utils::GetLogger().Info("Successfully deleted local" + remoteDeleteInfo + " trust data for repository " + gun);
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& e) {

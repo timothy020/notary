@@ -290,33 +290,33 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
             
             // 一次性更新所有验证后的元数据（包括生成的snapshot和timestamp）
             for (const auto& update : validatedUpdates) {
-                auto result = ctx.storageService->StoreMetadata(gun, update.role, update.roleName, update.data);
-                if (!result.ok()) {
-                    // 处理版本冲突
-                    if (result.error().what().find("Old version") != std::string::npos) {
-                        utils::GetLogger().Info("版本冲突", 
-                            utils::LogContext()
-                                .With("gun", gun)
-                                .With("role", update.roleName));
-                        return Error(8, "版本冲突: " + result.error().what()); // ErrOldVersion
-                    }
-                    
-                    utils::GetLogger().Error("存储元数据失败", 
+            auto result = ctx.storageService->StoreMetadata(gun, update.role, update.roleName, update.data);
+            if (!result.ok()) {
+                // 处理版本冲突
+                if (result.error().what().find("Old version") != std::string::npos) {
+                    utils::GetLogger().Info("版本冲突", 
                         utils::LogContext()
                             .With("gun", gun)
-                            .With("role", update.roleName)
-                            .With("error", result.error().what()));
-                    return Error(9, "更新失败: " + result.error().what()); // ErrUpdating
+                            .With("role", update.roleName));
+                    return Error(8, "版本冲突: " + result.error().what()); // ErrOldVersion
                 }
-            }
-            
-            // 记录更新信息
-            for (const auto& update : validatedUpdates) {
-                utils::GetLogger().Info("更新元数据成功", 
+                
+                utils::GetLogger().Error("存储元数据失败", 
                     utils::LogContext()
                         .With("gun", gun)
                         .With("role", update.roleName)
-                        .With("version", std::to_string(update.version)));
+                        .With("error", result.error().what()));
+                return Error(9, "更新失败: " + result.error().what()); // ErrUpdating
+            }
+        }
+        
+        // 记录更新信息
+            for (const auto& update : validatedUpdates) {
+            utils::GetLogger().Info("更新元数据成功", 
+                utils::LogContext()
+                    .With("gun", gun)
+                    .With("role", update.roleName)
+                    .With("version", std::to_string(update.version)));
             }
             
         } catch (const std::exception& e) {
@@ -516,11 +516,43 @@ Error GetHandler(const Context& ctx, Response& resp) {
 
 // 处理删除请求
 Error DeleteHandler(const Context& ctx, Response& resp) {
-    utils::GetLogger().Info("处理删除请求", 
-        utils::LogContext()
-            .With("gun", ctx.request.params.count("gun") ? ctx.request.params.at("gun") : ""));
+    // 提取gun参数
+    const auto& params = ctx.request.params;
+    auto gunIt = params.find("gun");
     
-    // 暂时简单实现，返回成功
+    if (gunIt == params.end()) {
+        utils::GetLogger().Error("删除请求缺少必要参数",
+            utils::LogContext().With("params", "gun"));
+        return Error::ErrMetadataNotFound;
+    }
+    
+    const std::string& gun = gunIt->second;
+    
+    utils::GetLogger().Info("处理删除GUN请求", 
+        utils::LogContext().With("gun", gun));
+    
+    // 检查存储服务是否可用
+    if (!ctx.storageService) {
+        utils::GetLogger().Error("存储服务不可用，无法删除仓库", 
+            utils::LogContext().With("gun", gun));
+        return Error::ErrNoStorage;
+    }
+    
+    // 调用存储服务删除GUN
+    auto result = ctx.storageService->DeleteGUN(gun);
+    if (!result.ok()) {
+        utils::GetLogger().Error("删除仓库失败", 
+            utils::LogContext()
+                .With("gun", gun)
+                .With("error", result.error().what()));
+        return Error(1, "删除仓库失败: " + result.error().what()); // ErrUnknown
+    }
+    
+    // 删除成功，记录日志
+    utils::GetLogger().Info("仓库信任数据删除成功", 
+        utils::LogContext().With("gun", gun));
+    
+    // 返回成功响应
     resp.body = "{}";
     resp.headers["Content-Type"] = "application/json";
     return Error();

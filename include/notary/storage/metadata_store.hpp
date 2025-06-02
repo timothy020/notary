@@ -60,6 +60,9 @@ public:
     Error SetMulti(const std::string& gun,
                   const std::map<std::string, json>& metas);
 
+    // 删除GUN的所有远程元数据 - 对应Go版本的RemoveAll
+    Result<bool> RemoveAll() const;
+
 private:
     std::string serverURL_;
     std::string metaExtension_;

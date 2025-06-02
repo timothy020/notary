@@ -78,7 +78,7 @@ int main(int argc, char* argv[]) {
     // cryptoService.SetDefaultPassphrase("server");
     
     // 创建文件存储服务
-    notary::server::storage::FileStorageService storageService(trustDir+"/tuf");
+    notary::server::storage::FileStorageService storageService(trustDir+"/tuf/");
     
     // 创建服务器配置
     notary::server::Config config;
