@@ -40,10 +40,10 @@ std::vector<uint8_t> TUFChange::Serialize() const {
 // TUFRootData序列化方法
 std::vector<uint8_t> TUFRootData::Serialize() const {
     json j;
-    j["roleName"] = roleToString(RoleName);
+    j["roleName"] = roleToString(roleName);
     j["keys"] = json::array();
     
-    for (const auto& key : Keys) {
+    for (const auto& key : keys) {
         json keyJson;
         keyJson["id"] = key->ID();
         keyJson["algorithm"] = key->Algorithm();
