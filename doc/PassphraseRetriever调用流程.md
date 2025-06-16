@@ -24,3 +24,25 @@ for attempts := 0; ; attempts++ {
 }
 ```
 ## Cpp调用流程
+创建与赋值：
+- `main.cpp`：notary命令（以init为例）的回调函数中调用Repository构造函数
+```cpp
+init->callback([&]() {
+	// ...
+	// 2. 创建仓库工厂并获取仓库实例
+	Repository repo(gun, trustDir, serverURL);
+	// ...
+}        
+```
+- `repository.cpp`：`Repository`类的构造函数添加passRetriever
+```cpp
+Repository::Repository(const GUN& gun, const std::string& trustDir, const std::string& serverURL)
+    {
+    //...
+    auto passRetriever = passphrase::PromptRetriever();
+    //...
+```
+- `PassRetriever.cpp`：实现具体功能
+调用：
+- `crypto_service.cpp`：AddKey()：调用KeyStorage的AddKey
+- `key_storage.go`：GenericKeyStore的AddKey调用passRetriever
