@@ -73,6 +73,61 @@ void prettyPrintTargets(const std::vector<TargetWithRole>& targets) {
     }
 }
 
+// 美化打印更改列表 (对应Go的changelist状态显示)
+void prettyPrintChanges(const std::vector<std::shared_ptr<changelist::Change>>& changes) {
+    if (changes.empty()) {
+        std::cout << "No unpublished changes for this repository." << std::endl;
+        std::cout << "To sign and publish changes to this repository, run `notary publish <gun>`" << std::endl;
+        return;
+    }
+    
+    // 计算列宽
+    size_t maxActionWidth = 6;  // "ACTION"的长度
+    size_t maxScopeWidth = 5;   // "SCOPE"的长度  
+    size_t maxTypeWidth = 4;    // "TYPE"的长度
+    size_t maxPathWidth = 4;    // "PATH"的长度
+    
+    for (const auto& change : changes) {
+        maxActionWidth = std::max(maxActionWidth, change->Action().length());
+        maxScopeWidth = std::max(maxScopeWidth, change->Scope().length());
+        maxTypeWidth = std::max(maxTypeWidth, change->Type().length());
+        maxPathWidth = std::max(maxPathWidth, change->Path().length());
+    }
+    
+    // 打印表头
+    std::cout << std::left
+              << std::setw(4) << "#"
+              << std::setw(maxActionWidth + 2) << "ACTION"
+              << std::setw(maxScopeWidth + 2) << "SCOPE"
+              << std::setw(maxTypeWidth + 2) << "TYPE"
+              << std::setw(maxPathWidth + 2) << "PATH"
+              << std::endl;
+    
+    // 打印分隔线
+    std::cout << std::string(4, '-')
+              << std::string(maxActionWidth + 2, '-')
+              << std::string(maxScopeWidth + 2, '-')
+              << std::string(maxTypeWidth + 2, '-')
+              << std::string(maxPathWidth + 2, '-')
+              << std::endl;
+    
+    // 打印每个更改
+    for (size_t i = 0; i < changes.size(); ++i) {
+        const auto& change = changes[i];
+        
+        std::cout << std::left
+                  << std::setw(4) << (i)  // 更改编号从0开始
+                  << std::setw(maxActionWidth + 2) << change->Action()
+                  << std::setw(maxScopeWidth + 2) << change->Scope()
+                  << std::setw(maxTypeWidth + 2) << change->Type()
+                  << std::setw(maxPathWidth + 2) << change->Path()
+                  << std::endl;
+    }
+    
+    std::cout << std::endl;
+    std::cout << "To sign and publish changes to this repository, run `notary publish " << std::endl;
+}
+
 // 加载配置
 Error loadConfig(const std::string& configFile, std::string& trustDir, std::string& serverURL) {
     // 如果没有指定配置文件，使用默认值
@@ -509,6 +564,117 @@ int main(int argc, char** argv) {
             
             // 5. 美化打印目标列表 (对应Go的prettyPrintTargets)
             prettyPrintTargets(targetList);
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+    // status 命令 - 显示本地可信集合的未发布更改状态 (对应Go的changelist相关功能)
+    auto status = app.add_subcommand("status", "Displays unpublished changes to the trusted collection");
+    
+    status->add_option("gun", gun, "Globally Unique Name")->required();
+    
+    status->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Checking status for GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
+            }
+            
+            // 2. 创建仓库实例
+            Repository repo(gun, trustDir, serverURL);
+            
+            // 3. 获取changelist
+            auto changelist = repo.GetChangelistPublic();
+            if (!changelist) {
+                utils::GetLogger().Error("Failed to get changelist");
+                return;
+            }
+            
+            // 4. 获取所有未发布的更改
+            auto changes = changelist->List();
+            
+            // 5. 显示更改状态
+            prettyPrintChanges(changes);
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+    // reset 命令 - 重置本地可信集合的未发布更改 (对应Go的reset相关功能)
+    auto reset = app.add_subcommand("reset", "Resets unpublished changes to the trusted collection");
+    bool resetAll = false;
+    std::vector<int> resetNumbers;
+    
+    reset->add_option("gun", gun, "Globally Unique Name")->required();
+    reset->add_flag("--all", resetAll, "Reset all unpublished changes");
+    reset->add_option("-n,--number", resetNumbers, "Reset specific change numbers");
+    
+    reset->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Resetting changes for GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
+            }
+            
+            // 2. 创建仓库实例
+            Repository repo(gun, trustDir, serverURL);
+            
+            // 3. 获取changelist
+            auto changelist = repo.GetChangelistPublic();
+            if (!changelist) {
+                utils::GetLogger().Error("Failed to get changelist");
+                return;
+            }
+            
+            // 4. 执行重置操作
+            Error resetErr;
+            if (resetAll) {
+                // 重置所有更改 (对应Go的Clear方法)
+                resetErr = changelist->Clear("");
+                if (!resetErr.ok()) {
+                    utils::GetLogger().Error("Error resetting all changes: " + resetErr.what());
+                    return;
+                }
+                utils::GetLogger().Info("Successfully reset all unpublished changes for " + gun);
+            } else if (!resetNumbers.empty()) {
+                // 重置指定编号的更改 (对应Go的Remove方法)
+                resetErr = changelist->Remove(resetNumbers);
+                if (!resetErr.ok()) {
+                    utils::GetLogger().Error("Error resetting specific changes: " + resetErr.what());
+                    return;
+                }
+                utils::GetLogger().Info("Successfully reset selected unpublished changes for " + gun);
+            } else {
+                utils::GetLogger().Error("Must specify either --all or --number option");
+                return;
+            }
             
         } catch (const std::exception& e) {
             utils::GetLogger().Error("Error: " + std::string(e.what()));

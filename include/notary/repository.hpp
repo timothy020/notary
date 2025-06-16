@@ -142,8 +142,8 @@ public:
     // 列出所有目标 (对应Go的ListTargets)
     Result<std::vector<TargetWithRole>> ListTargets(const std::vector<RoleName>& roles = {});
                                    
-    // 获取changelist
-    changelist::Changelist& GetChangelist() { return *changelist_; }
+    // 获取changelist的公共接口 (对应Go的GetChangelist)
+    std::shared_ptr<changelist::Changelist> GetChangelistPublic() const { return changelist_; }
     
     // 发布更改
     Error Publish();
