@@ -27,6 +27,12 @@ struct Target {
     json custom;                  // 自定义数据
 };
 
+// 带角色信息的目标结构体 (对应Go的TargetWithRole)
+struct TargetWithRole {
+    Target target;                // 目标信息
+    RoleName role;                // 角色名称
+};
+
 // // Changelist 相关类型和接口定义
 // namespace changelist {
 
@@ -133,6 +139,8 @@ public:
     // 添加目标文件
     Error AddTarget(const Target& target, const std::vector<std::string>& roles = {});
     
+    // 列出所有目标 (对应Go的ListTargets)
+    Result<std::vector<TargetWithRole>> ListTargets(const std::vector<RoleName>& roles = {});
                                    
     // 获取changelist
     changelist::Changelist& GetChangelist() { return *changelist_; }

@@ -1092,4 +1092,86 @@ Error Repository::DeleteTrustData(const std::string& baseDir, const GUN& gun,
     return Error(); // 成功
 }
 
+// 列出所有目标 (对应Go的ListTargets)
+Result<std::vector<TargetWithRole>> Repository::ListTargets(const std::vector<RoleName>& roles) {
+    try {
+        // 首先更新TUF元数据 (对应Go版本的updateTUF调用)
+        auto updateErr = updateTUF(false);
+        if (!updateErr.ok()) {
+            // 如果远程更新失败，尝试从本地缓存加载
+            auto bootstrapErr = bootstrapRepo();
+            if (!bootstrapErr.ok()) {
+                return Error("Failed to load repository: " + updateErr.what() + " and " + bootstrapErr.what());
+            }
+        }
+        if (!tufRepo_) {
+            return Error("TUF repository not initialized");
+        }
+        
+        // 如果没有指定角色，默认使用targets角色 (对应Go的if len(roles) == 0)
+        std::vector<RoleName> effectiveRoles = roles;
+        if (effectiveRoles.empty()) {
+            effectiveRoles.push_back(RoleName::TargetsRole);
+        }
+        
+        // 用于存储目标的map，防止重复 (对应Go的targets := make(map[string]*TargetWithRole))
+        std::map<std::string, TargetWithRole> targets;
+        
+        // 遍历每个角色 (对应Go的for _, role := range roles)
+        for (const auto& role : effectiveRoles) {
+            // 定义要跳过的角色数组 (对应Go的skipRoles := utils.RoleNameSliceRemove(roles, role))
+            std::vector<RoleName> skipRoles = utils::roleNameSliceRemove(effectiveRoles, role);
+            
+            // 定义访问者函数来按优先级顺序填充目标map (对应Go的listVisitorFunc)
+            tuf::WalkVisitorFunc listVisitorFunc = [&](std::shared_ptr<tuf::SignedTargets> tgt, 
+                                                      const tuf::DelegationRole& validRole) -> tuf::WalkResult {
+                if (!tgt) {
+                    return std::monostate{}; // 继续遍历
+                }
+                
+                // 我们找到了目标，应该尝试将它们添加到目标map中
+                // (对应Go的for targetName, targetMeta := range tgt.Signed.Targets)
+                for (const auto& [targetName, targetMeta] : tgt->Signed.targets) {
+                    // 按优先级处理，不覆盖之前设置的目标
+                    // 并检查此路径对此角色是否有效 (对应Go的if _, ok := targets[targetName]; ok || !validRole.CheckPaths(targetName))
+                    if (targets.find(targetName) != targets.end() || !validRole.CheckPaths(targetName)) {
+                        continue;
+                    }
+                    
+                    // 创建带角色的目标对象 (对应Go的targets[targetName] = &TargetWithRole{...})
+                    TargetWithRole targetWithRole;
+                    targetWithRole.target.name = targetName;
+                    targetWithRole.target.hashes = targetMeta.Hashes;
+                    targetWithRole.target.length = targetMeta.Length;
+                    targetWithRole.target.custom = targetMeta.Custom;
+                    targetWithRole.role = validRole.Name;
+                    
+                    targets[targetName] = targetWithRole;
+                }
+                
+                return std::monostate{}; // 继续遍历
+            };
+            
+            // 执行目标遍历 (对应Go的r.tufRepo.WalkTargets("", role, listVisitorFunc, skipRoles...))
+            auto walkErr = tufRepo_->WalkTargets("", role, listVisitorFunc, skipRoles);
+            if (!walkErr.ok()) {
+                return Error("Error walking targets for role " + roleToString(role) + ": " + walkErr.what());
+            }
+        }
+        
+        // 将map转换为vector (对应Go的var targetList []*TargetWithRole; for _, v := range targets)
+        std::vector<TargetWithRole> targetList;
+        targetList.reserve(targets.size());
+        
+        for (const auto& [name, targetWithRole] : targets) {
+            targetList.push_back(targetWithRole);
+        }
+        
+        return targetList;
+        
+    } catch (const std::exception& e) {
+        return Error("Failed to list targets: " + std::string(e.what()));
+    }
+}
+
 } // namespace notary 

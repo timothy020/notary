@@ -361,7 +361,21 @@ Error witnessTargets(std::shared_ptr<tuf::Repo> repo,
     // TODO: 实现witness逻辑
     // 这是一个复杂的功能，用于处理无效的目标见证
     return Error("Witness targets not yet implemented");
+}
+
+// 从角色列表中移除指定角色 (对应Go的RoleNameSliceRemove)
+std::vector<RoleName> roleNameSliceRemove(const std::vector<RoleName>& roles, RoleName roleToRemove) {
+    std::vector<RoleName> result;
+    result.reserve(roles.size());
+    
+    for (const auto& role : roles) {
+        if (role != roleToRemove) {
+            result.push_back(role);
+        }
     }
+    
+    return result;
+}
 
 }
 }

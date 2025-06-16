@@ -168,7 +168,6 @@ PassRetriever PromptRetriever() {
             return std::make_tuple("", false, Error("No input available"));
         };
     }
-    utils::GetLogger().Info("PromptRetriever");
     return PromptRetrieverWithInOut(&std::cin, &std::cout);
 }
 

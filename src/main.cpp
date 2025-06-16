@@ -3,11 +3,75 @@
 #include <CLI/CLI.hpp>
 #include "notary/repository.hpp"
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 
 using namespace notary;
 
 // 使用标准filesystem命名空间
 namespace fs = std::filesystem;
+
+// 美化打印目标列表 (对应Go的prettyPrintTargets函数)
+void prettyPrintTargets(const std::vector<TargetWithRole>& targets) {
+    if (targets.empty()) {
+        std::cout << "No targets present in this repository." << std::endl;
+        return;
+    }
+    
+    // 计算列宽 (对应Go的计算最大宽度逻辑)
+    size_t maxNameWidth = 4;  // "NAME"的长度
+    size_t maxSizeWidth = 4;  // "SIZE"的长度
+    size_t maxRoleWidth = 4;  // "ROLE"的长度
+    
+    for (const auto& targetWithRole : targets) {
+        maxNameWidth = std::max(maxNameWidth, targetWithRole.target.name.length());
+        maxSizeWidth = std::max(maxSizeWidth, std::to_string(targetWithRole.target.length).length());
+        maxRoleWidth = std::max(maxRoleWidth, roleToString(targetWithRole.role).length());
+    }
+    
+    // 打印表头 (对应Go的fmt.Fprintf)
+    std::cout << std::left 
+              << std::setw(maxNameWidth + 2) << "NAME"
+              << std::setw(16) << "DIGEST"
+              << std::setw(maxSizeWidth + 2) << "SIZE (BYTES)"
+              << std::setw(maxRoleWidth + 2) << "ROLE"
+              << std::endl;
+    
+    // 打印分隔线
+    std::cout << std::string(maxNameWidth + 2, '-') 
+              << std::string(16, '-')
+              << std::string(maxSizeWidth + 2, '-')
+              << std::string(maxRoleWidth + 2, '-')
+              << std::endl;
+    
+    // 打印每个目标 (对应Go的遍历targets逻辑)
+    for (const auto& targetWithRole : targets) {
+        const auto& target = targetWithRole.target;
+        
+        // 获取第一个哈希值用于显示 (对应Go的target.Hashes.Hex())
+        std::string digest = "N/A";
+        if (!target.hashes.empty()) {
+            const auto& firstHash = target.hashes.begin()->second;
+            if (!firstHash.empty()) {
+                // 将哈希值转换为十六进制字符串，只显示前12个字符
+                std::stringstream ss;
+                for (size_t i = 0; i < std::min(firstHash.size(), size_t(6)); ++i) {
+                    ss << std::hex << std::setfill('0') << std::setw(2) 
+                       << static_cast<unsigned>(firstHash[i]);
+                }
+                digest = ss.str();
+            }
+        }
+        
+        // 打印目标信息
+        std::cout << std::left
+                  << std::setw(maxNameWidth + 2) << target.name
+                  << std::setw(16) << digest
+                  << std::setw(maxSizeWidth + 2) << target.length
+                  << std::setw(maxRoleWidth + 2) << roleToString(targetWithRole.role)
+                  << std::endl;
+    }
+}
 
 // 加载配置
 Error loadConfig(const std::string& configFile, std::string& trustDir, std::string& serverURL) {
@@ -387,6 +451,64 @@ int main(int argc, char** argv) {
                 .With("file", targetFilePath)
                 .With("size", std::to_string(target.length))
                 .With("hash_algorithms", std::to_string(target.hashes.size())));
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+    // list 命令 - 列出远程可信集合中的所有目标 (对应Go的tufList)
+    auto list = app.add_subcommand("list", "Lists targets in the remote trusted collection");
+    std::vector<std::string> listRoles;  // 用于指定要列出的角色
+    
+    list->add_option("gun", gun, "Globally Unique Name")->required();
+    list->add_option("-r,--roles", listRoles, "Delegation roles to list targets from");
+    
+    list->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Listing targets for GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
+            }
+            
+            // 2. 创建仓库实例 (对应Go的ConfigureRepo和fact(gun))
+            Repository repo(gun, trustDir, serverURL);
+            
+            // 3. 转换角色名称字符串为RoleName枚举 (对应Go的data.NewRoleList(t.roles))
+            std::vector<RoleName> roleNames;
+            for (const auto& roleStr : listRoles) {
+                // 检查角色字符串是否有效
+                if (roleStr == ROOT_ROLE || roleStr == TARGETS_ROLE || roleStr == SNAPSHOT_ROLE || roleStr == TIMESTAMP_ROLE) {
+                    auto roleName = stringToRole(roleStr);
+                    roleNames.push_back(roleName);
+                } else {
+                    utils::GetLogger().Warn("Ignoring invalid role: " + roleStr);
+                }
+            }
+            
+            // 4. 获取远程签名目标列表 (对应Go的nRepo.ListTargets)
+            auto targetListResult = repo.ListTargets(roleNames);
+            if (!targetListResult.ok()) {
+                utils::GetLogger().Error("Error listing targets: " + targetListResult.error().what());
+                return;
+            }
+            
+            auto targetList = targetListResult.value();
+            
+            // 5. 美化打印目标列表 (对应Go的prettyPrintTargets)
+            prettyPrintTargets(targetList);
             
         } catch (const std::exception& e) {
             utils::GetLogger().Error("Error: " + std::string(e.what()));
