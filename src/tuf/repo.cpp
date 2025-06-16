@@ -1226,17 +1226,58 @@ Error Repo::AddTargets(RoleName role, const std::map<std::string, FileMeta>& tar
 }
 
 Error Repo::RemoveTargets(RoleName role, const std::vector<std::string>& targets) {
-    auto targetsMetadata = GetTargets(role);
-    if (!targetsMetadata) {
-        return Error("Targets metadata not found for role");
+    // TODO: 暂时忽略 verifyCanSign 检查
+    // auto cantSignErr = VerifyCanSign(role);
+    // if (cantSignErr is InvalidRole) return cantSignErr;
+    
+    bool needSign = false;
+    
+    // 检查角色是否存在 (对应Go的_, ok := tr.Targets[role])
+    auto roleIt = targets_.find(role);
+    if (roleIt == targets_.end()) {
+        // 如果角色不存在，工作已完成 (对应Go的if the role exists but metadata does not yet, then our work is done)
+        return Error();
     }
     
-    for (const auto& targetName : targets) {
-        targetsMetadata->Signed.targets.erase(targetName);
+    // 创建可复用的移除访问者函数 (对应Go的removeTargetVisitor，但移到循环外提高效率)
+    auto createRemoveTargetVisitor = [&](const std::string& targetPath) -> WalkVisitorFunc {
+        return [&, targetPath](std::shared_ptr<SignedTargets> tgt, 
+                              const DelegationRole& validRole) -> WalkResult {
+            if (!tgt) {
+                return std::monostate{};
+            }
+            
+            // 我们在遍历中已经验证了角色路径，所以只需修改元数据
+            // 我们不检查目标路径与有效角色路径的匹配，因为可能处于无效状态需要修复
+            // (对应Go的注释和逻辑)
+            auto targetIt = tgt->Signed.targets.find(targetPath);
+            if (targetIt != tgt->Signed.targets.end()) {
+                // TODO: 这里应该检查 cantSignErr == nil，暂时忽略
+                needSign = true;
+                tgt->Signed.targets.erase(targetIt);
+                tgt->Dirty = true;
+            }
+            
+            return StopWalk{}; // 停止遍历 (对应Go的return StopWalk{})
+        };
+    };
+    
+    // 为每个目标路径执行删除操作
+    for (const auto& targetPath : targets) {
+        // 创建针对特定目标的访问者函数
+        auto removeTargetVisitor = createRemoveTargetVisitor(targetPath);
+        
+        // 遍历目标 (对应Go的tr.WalkTargets("", role, removeTargetVisitor(path)))
+        auto walkErr = WalkTargets("", role, removeTargetVisitor);
+        if (!walkErr.ok()) {
+            return walkErr;
+        }
+        
+        // TODO: 这里应该检查 needSign && cantSignErr != nil，暂时忽略
+        // if (needSign && cantSignErr != nil) return cantSignErr;
     }
     
-    targetsMetadata->Dirty = true;
-    return Error();
+    return Error(); // 成功
 }
 
 // 查询方法实现

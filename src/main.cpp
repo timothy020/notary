@@ -384,6 +384,59 @@ int main(int argc, char** argv) {
         }
     });
     
+    // remove 命令 - 从可信集合中移除目标 (对应Go的RemoveTarget)
+    auto remove = app.add_subcommand("remove", "Removes a target from the trusted collection");
+    std::vector<std::string> removeRoles;
+    std::string removeTargetName;
+    
+    remove->add_option("gun", gun, "Globally Unique Name")->required();
+    remove->add_option("target_name", removeTargetName, "Target name to remove")->required();
+    remove->add_option("-r,--roles", removeRoles, "Delegation roles to remove this target from");
+    remove->add_flag("-p,--publish", autoPublish, "Auto publish after removing target");
+    
+    remove->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Removing target from GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
+            }
+            
+            // 2. 创建仓库实例
+            Repository repo(gun, trustDir, serverURL);
+            
+            // 3. 移除目标 (对应Go的RemoveTarget调用)
+            auto removeErr = repo.RemoveTarget(removeTargetName, removeRoles);
+            if (!removeErr.ok()) {
+                utils::GetLogger().Error("Error removing target: " + removeErr.what());
+                return;
+            }
+            
+            utils::GetLogger().Info("Removal of target \"" + removeTargetName + "\" from repository \"" + gun + "\" staged for next publish.");
+            
+            // 4. 可能自动发布
+            auto pubErr = maybeAutoPublish(autoPublish, gun, serverURL, repo);
+            if (!pubErr.ok()) {
+                utils::GetLogger().Error("Error publishing changes: " + pubErr.what());
+                return;
+            }
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
     // publish 命令
     auto publish = app.add_subcommand("publish", "Publishes staged changes");
     

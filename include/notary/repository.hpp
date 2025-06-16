@@ -139,6 +139,9 @@ public:
     // 添加目标文件
     Error AddTarget(const Target& target, const std::vector<std::string>& roles = {});
     
+    // 移除目标文件 (对应Go的RemoveTarget)
+    Error RemoveTarget(const std::string& targetName, const std::vector<std::string>& roles = {});
+    
     // 列出所有目标 (对应Go的ListTargets)
     Result<std::vector<TargetWithRole>> ListTargets(const std::vector<RoleName>& roles = {});
                                    

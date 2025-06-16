@@ -1174,4 +1174,29 @@ Result<std::vector<TargetWithRole>> Repository::ListTargets(const std::vector<Ro
     }
 }
 
+// 移除目标文件 (对应Go的RemoveTarget)
+Error Repository::RemoveTarget(const std::string& targetName, const std::vector<std::string>& roles) {
+    try {
+        // 记录调试信息 (对应Go的logrus.Debugf("Removing target \"%s\"", targetName))
+        utils::GetLogger().Debug("Removing target", utils::LogContext()
+            .With("targetName", targetName));
+        
+        // 创建删除操作的变更模板 (对应Go的changelist.NewTUFChange)
+        // changelist.ActionDelete, "", changelist.TypeTargetsTarget, targetName, nil
+        auto templateChange = std::make_shared<changelist::TUFChange>(
+            changelist::ActionDelete,      // 删除操作
+            "",                           // scope为空，对应Go版本
+            changelist::TypeTargetsTarget, // 目标类型
+            targetName,                   // 目标路径/名称
+            std::vector<uint8_t>()        // 删除操作时内容为空 (对应Go的nil)
+        );
+        
+        // 使用addChange函数处理角色验证和变更创建 (对应Go的addChange(r.changelist, template, roles...))
+        return addChange(changelist_, templateChange, roles);
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to remove target: ") + e.what());
+    }
+}
+
 } // namespace notary 
