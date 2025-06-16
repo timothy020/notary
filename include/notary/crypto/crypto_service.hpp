@@ -22,10 +22,6 @@ public:
         keyStores_.push_back(keyStore);
     }
     
-    // 设置默认密码
-    void SetDefaultPassphrase(const std::string& passphrase) {
-        defaultPassphrase_ = passphrase;
-    }
     
     // 创建新密钥
     Result<std::shared_ptr<PublicKey>> Create(RoleName role, 
@@ -71,7 +67,6 @@ private:
     Result<std::shared_ptr<PrivateKey>> generatePrivateKey(const std::string& algorithm);
     
 private:
-    std::string defaultPassphrase_;
     std::vector<std::shared_ptr<storage::GenericKeyStore>> keyStores_;
 };
 

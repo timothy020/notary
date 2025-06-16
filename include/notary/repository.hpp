@@ -104,8 +104,6 @@ class Repository {
 public:
     Repository(const GUN& gun, const std::string& trustDir, const std::string& serverURL);
     
-    // 设置密码
-    void SetPassphrase(const std::string& passphrase);
     
     // 初始化仓库
     Error Initialize(const std::vector<std::string>& rootKeyIDs,

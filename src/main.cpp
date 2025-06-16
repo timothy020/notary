@@ -119,13 +119,11 @@ int main(int argc, char** argv) {
     std::string gun;
     std::string rootKey;
     std::string rootCert;
-    std::string password;
     bool autoPublish = false;
     
     init->add_option("gun", gun, "Globally Unique Name")->required();
     init->add_option("--rootkey", rootKey, "Root key file path");
     init->add_option("--rootcert", rootCert, "Root certificate file path");
-    init->add_option("--password,--passphrase", password, "Password for key encryption");
     init->add_flag("-p,--publish", autoPublish, "Auto publish after initialization");
     
     init->callback([&]() {
@@ -146,15 +144,8 @@ int main(int argc, char** argv) {
                     .With("serverURL", serverURL));
             }
             
-            // 设置默认密码（如果未提供）
-            if (password.empty()) {
-                password = "changeme";  // 默认密码
-                utils::GetLogger().Warn("Using default password. Please change it for production use.");
-            }
-            
             // 2. 创建仓库工厂并获取仓库实例
             Repository repo(gun, trustDir, serverURL);
-            repo.SetPassphrase(password); // 设置密码
             
             // 3. 导入根密钥
             std::vector<std::string> rootKeyIDs;
@@ -212,7 +203,6 @@ int main(int argc, char** argv) {
     add->add_option("-r,--roles", roles, "Delegation roles to add this target to");
     add->add_option("--custom", customPath, "Path to the file containing custom data for this target");
     add->add_flag("-p,--publish", autoPublish, "Auto publish after adding target");
-    add->add_option("--password,--passphrase", password, "Password for key encryption");
     
     add->callback([&]() {
         try {
@@ -232,15 +222,8 @@ int main(int argc, char** argv) {
                     .With("serverURL", serverURL));
             }
             
-            // 设置默认密码（如果未提供）
-            if (password.empty()) {
-                password = "changeme";  // 默认密码
-                utils::GetLogger().Warn("Using default password. Please change it for production use.");
-            }
-            
             // 2. 创建仓库工厂并获取仓库实例
             Repository repo(gun, trustDir, serverURL);
-            repo.SetPassphrase(password); // 设置密码
             
             // 3. 加载自定义数据（如果有）
             std::vector<uint8_t> customData;
@@ -286,7 +269,6 @@ int main(int argc, char** argv) {
     auto publish = app.add_subcommand("publish", "Publishes staged changes");
     
     publish->add_option("gun", gun, "Globally Unique Name")->required();
-    publish->add_option("--password,--passphrase", password, "Password for key encryption");
     
     publish->callback([&]() {
         try {
@@ -306,15 +288,9 @@ int main(int argc, char** argv) {
                     .With("serverURL", serverURL));
             }
             
-            // 设置默认密码（如果未提供）
-            if (password.empty()) {
-                password = "changeme";  // 默认密码
-                utils::GetLogger().Warn("Using default password. Please change it for production use.");
-            }
             
             // 2. 创建仓库工厂并获取仓库实例
             Repository repo(gun, trustDir, serverURL);
-            repo.SetPassphrase(password); // 设置密码
             
             // 3. 发布更改
             auto pubErr = repo.Publish();
@@ -338,7 +314,6 @@ int main(int argc, char** argv) {
     verify->add_option("gun", gun, "Globally Unique Name")->required();
     verify->add_option("target_name", targetName, "Target name to verify")->required();
     verify->add_option("target_file", targetFilePath, "Path to the target file to verify")->required();
-    verify->add_option("--password,--passphrase", password, "Password for key encryption");
     
     verify->callback([&]() {
         try {
@@ -357,12 +332,6 @@ int main(int argc, char** argv) {
                 utils::GetLogger().Info("Verifying target in GUN: " + gun, utils::LogContext()
                     .With("target", targetName)
                     .With("file", targetFilePath));
-            }
-            
-            // 设置默认密码（如果未提供）
-            if (password.empty()) {
-                password = "changeme";  // 默认密码
-                utils::GetLogger().Warn("Using default password. Please change it for production use.");
             }
             
             // 2. 检查目标文件是否存在
@@ -395,7 +364,6 @@ int main(int argc, char** argv) {
             
             // 4. 创建仓库实例
             Repository repo(gun, trustDir, serverURL);
-            repo.SetPassphrase(password);
             
             // 5. 通过名称获取目标信息
             auto targetResult = repo.GetTargetByName(targetName);

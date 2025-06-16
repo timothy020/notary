@@ -7,6 +7,7 @@
 #include "notary/changelist/changelist.hpp"
 #include "notary/storage/key_storage.hpp"
 #include "notary/storage/metadata_store.hpp"
+#include "notary/passRetriever/passRetriever.hpp"
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -101,23 +102,20 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     {
     // 初始化cryptoService_
     // 定义一个简单的 PassRetriever，表示无密码
-    auto passRetriever = [](const std::string& keyName,
-                                  const std::string& alias,
-                                  bool createNew,
-                                  int attempts) -> std::tuple<std::string, bool, Error> {
-        // 返回空密码（""），不放弃（false），无错误（Error()）
-        return std::make_tuple("", false, Error());
-    };
+    // auto passRetriever = [](const std::string& keyName,
+    //                               const std::string& alias,
+    //                               bool createNew,
+    //                               int attempts) -> std::tuple<std::string, bool, Error> {
+    //     // 返回空密码（""），不放弃（false），无错误（Error()）
+    //     return std::make_tuple("", false, Error());
+    // };
+    auto passRetriever = passphrase::PromptRetriever();
     std::unique_ptr<storage::GenericKeyStore> keyStores = notary::storage::GenericKeyStore::NewKeyFileStore(trustDir+"/private", passRetriever);
     cryptoService_ = std::make_shared<crypto::CryptoService>(std::vector<std::shared_ptr<storage::GenericKeyStore>>{std::move(keyStores)});
     
     // 初始化TUF Repo
     tufRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
     invalidRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
-}
-
-void Repository::SetPassphrase(const std::string& passphrase) {
-    cryptoService_->SetDefaultPassphrase(passphrase);
 }
 
 

@@ -9,6 +9,7 @@ file(GLOB_RECURSE SOURCES
     "utils/*.cpp"
     "tuf/*.cpp"
     "changelist/*.cpp"
+    "passRetriever/*.cpp"
 )
 
 # 创建库
@@ -32,6 +33,7 @@ add_library(notary_lib
     utils/tools.cpp
     utils/helpers.cpp
     changelist/changelist.cpp
+    passRetriever/passRetriever.cpp
     types.cpp
     server_main.cpp
     tuf/repo.cpp
