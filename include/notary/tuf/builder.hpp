@@ -7,6 +7,7 @@
 #include <exception>
 #include "notary/types.hpp"
 #include "notary/tuf/repo.hpp"
+#include "notary/tuf/trustpinning.hpp"
 
 // 前向声明避免循环依赖
 namespace notary {
@@ -66,17 +67,6 @@ public:
 private:
     RoleName roleName_ = RoleName::RootRole;
     FileMeta fileMeta_;
-};
-
-// Trust Pin配置类 - 简化版本，用于信任锚定
-class TrustPinConfig {
-public:
-    TrustPinConfig() = default;
-    
-    // TODO: 根据需要添加具体的trust pinning配置
-    std::map<std::string, std::vector<std::string>> certs;
-    std::map<std::string, std::vector<std::string>> pubkeys;
-    bool disableTOFU = false; // Trust On First Use
 };
 
 // RepoBuilder接口 - 构建tuf.Repo的对象接口

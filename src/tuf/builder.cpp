@@ -610,7 +610,6 @@ Error RepoBuilderImpl::loadTimestamp(const std::vector<uint8_t>& content, int mi
     auto signedObj = signedResult.value();
 
     // 创建SignedTimestamp对象
-    // TODO : ValidTimestampStructure （timestamp.go)
     auto signedTimestamp = std::make_shared<SignedTimestamp>();
     
     // 从signedObj解析时间戳内容
