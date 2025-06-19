@@ -519,12 +519,8 @@ void SignedRoot::fromJson(const json& j) {
 Result<std::shared_ptr<notary::tuf::Signed>> SignedRoot::ToSigned() const {
     // 对内部Signed结构进行规范化JSON编码（类似Go的MarshalCanonical）
     json signedJson = Signed.toJson();
-    utils::GetLogger().Info("SignedRoot::ToSigned() signedJson_", utils::LogContext()
-        .With("signedJson_", signedJson.dump()));
     // 生成规范化的JSON字符串（sorted keys, no whitespace）
     std::string canonicalJson = signedJson.dump(-1, ' ', false, json::error_handler_t::strict);
-    utils::GetLogger().Info("SignedRoot::ToSigned() canonicalJson_", utils::LogContext()
-        .With("canonicalJson_", canonicalJson));
     
     // 转换为字节数组
     std::vector<uint8_t> signedBytes(canonicalJson.begin(), canonicalJson.end());
@@ -543,8 +539,6 @@ Result<std::shared_ptr<notary::tuf::Signed>> SignedRoot::ToSigned() const {
 
 std::vector<uint8_t> SignedRoot::Serialize() const {
     std::string jsonStr = toJson().dump();
-    utils::GetLogger().Info("SignedRoot::Serialize() root_", utils::LogContext()
-        .With("root_", jsonStr));
     return std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
 }
 

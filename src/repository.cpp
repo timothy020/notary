@@ -106,14 +106,14 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     {
     // 初始化cryptoService_
     // 定义一个简单的 PassRetriever，表示无密码
-    auto passRetriever = [](const std::string& keyName,
-                                  const std::string& alias,
-                                  bool createNew,
-                                  int attempts) -> std::tuple<std::string, bool, Error> {
-        // 返回空密码（""），不放弃（false），无错误（Error()）
-        return std::make_tuple("", false, Error());
-    };
-    // auto passRetriever = passphrase::PromptRetriever();
+    // auto passRetriever = [](const std::string& keyName,
+    //                               const std::string& alias,
+    //                               bool createNew,
+    //                               int attempts) -> std::tuple<std::string, bool, Error> {
+    //     // 返回空密码（""），不放弃（false），无错误（Error()）
+    //     return std::make_tuple("", false, Error());
+    // };
+    auto passRetriever = passphrase::PromptRetriever();
     std::unique_ptr<storage::GenericKeyStore> keyStores = notary::storage::GenericKeyStore::NewKeyFileStore(trustDir+"/private", passRetriever);
     cryptoService_ = std::make_shared<crypto::CryptoService>(std::vector<std::shared_ptr<storage::GenericKeyStore>>{std::move(keyStores)});
     
@@ -674,80 +674,6 @@ Error Repository::Publish() {
         }
         
         return Error(); // 成功
-
-        // // 应用changelist
-        // err = applyChangelist();
-        // if (!err.ok()) {
-        //     return err;
-        // }
-        // // 清除changelist
-        // err = changelist_->Clear("");
-        // if (!err.ok()) {
-        //     std::cerr << "Warning: Unable to clear changelist. You may want to manually delete the folder "
-        //               << changelist_->Location() << std::endl;
-        // }
-        // // 获取所有需要推送的元数据
-        // std::string gunStr = gun_.empty() ? "default" : gun_;
-        // std::map<std::string, std::vector<uint8_t>> updatedFiles;
-        // // 处理Root文件
-        // auto rootResult = cache_->Get(ROOT_ROLE);
-        // if (rootResult.ok()) {
-        //     if (needsResigning(rootResult.value()) || initialPublish) {
-        //         auto signedRoot = resignMetadata(rootResult.value(), "root");
-        //         if (!signedRoot.ok()) {
-        //             return Error(std::string("Failed to resign root metadata: ") + signedRoot.error().what());
-        //         }
-        //         updatedFiles["root"] = signedRoot.value();
-        //     } else {
-        //         // 直接使用vector<uint8_t>，不需要dump
-        //         updatedFiles["root"] = rootResult.value();
-        //     }
-        // }
-        // // 处理Targets文件
-        // auto targetsResult = cache_->Get(TARGETS_ROLE);
-        // if (targetsResult.ok()) {
-        //     if (needsResigning(targetsResult.value()) || initialPublish) {
-        //         auto signedTargets = resignMetadata(targetsResult.value(), "targets");
-        //         if (!signedTargets.ok()) {
-        //             return Error(std::string("Failed to resign targets metadata: ") + signedTargets.error().what());
-        //         }
-        //         updatedFiles["targets"] = signedTargets.value();
-        //     } else {
-        //         // 直接使用vector<uint8_t>，不需要dump
-        //         updatedFiles["targets"] = targetsResult.value();
-        //     }
-        // }
-        // // 处理Snapshot文件
-        // auto snapshotResult = cache_->Get(SNAPSHOT_ROLE);
-        // if (snapshotResult.ok()) {
-        //     if (needsResigning(snapshotResult.value()) || initialPublish) {
-        //         auto signedSnapshot = resignMetadata(snapshotResult.value(), "snapshot");
-        //         if (!signedSnapshot.ok()) {
-        //             std::cout << "Client does not have the key to sign snapshot. "
-        //                       << "Assuming that server should sign the snapshot." << std::endl;
-        //         } else {
-        //             updatedFiles["snapshot"] = signedSnapshot.value();
-        //         }
-        //     } else {
-        //         // 直接使用vector<uint8_t>，不需要dump
-        //         updatedFiles["snapshot"] = snapshotResult.value();
-        //     }
-        // } else {
-        //     // 如果没有snapshot文件，尝试初始化
-        //     err = initializeSnapshot();
-        //     if (!err.ok()) {
-        //         std::cerr << "Failed to initialize snapshot: " << err.what() << std::endl;
-        //         return err;
-        //     }
-        // }
-        // // 推送到远程服务器
-        // for (const auto& [role, data] : updatedFiles) {
-        //     err = remoteStore_->SetRemote(gunStr, role, data);
-        //     if (!err.ok()) {
-        //         return Error(std::string("Failed to publish ") + role + " metadata: " + err.what());
-        //     }
-        // }
-        // return Error(); // 成功
     } catch (const std::exception& e) {
         return Error(std::string("Failed to publish: ") + e.what());
     }
@@ -971,29 +897,6 @@ Result<Target> Repository::GetTargetByName(const std::string& targetName) {
             return Error("TUF repository not initialized");
         }
         
-        // === 原始实现（直接访问targets角色） ===
-        // // 获取targets角色的元数据
-        // auto targetsMap = tufRepo_->GetTargets();
-        // auto targetsIt = targetsMap.find(RoleName::TargetsRole);
-        // if (targetsIt == targetsMap.end()) {
-        //     return Error("Targets role not found in repository");
-        // }
-        // 
-        // auto targetsRole = targetsIt->second;
-        // if (!targetsRole) {
-        //     return Error("Targets role object is null");
-        // }
-        // 
-        // // 在targets中查找指定的目标
-        // auto targetFiles = targetsRole->Signed.targets;
-        // auto targetIt = targetFiles.find(targetName);
-        // if (targetIt == targetFiles.end()) {
-        //     return Error("Target not found: " + targetName);
-        // }
-        // 
-        // const auto& fileMeta = targetIt->second;
-        
-        // === 新实现（使用WalkTargets方式，对应Go版本） ===
         // 用于存储查找结果的变量
         tuf::FileMeta resultMeta;
         bool foundTarget = false;
