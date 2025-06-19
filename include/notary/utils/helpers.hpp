@@ -5,6 +5,7 @@
 #include "notary/types.hpp"
 #include "notary/tuf/repo.hpp"
 #include "notary/changelist/changelist.hpp"
+#include "notary/crypto/crypto_service.hpp"
 
 namespace notary {
 namespace utils {
@@ -38,6 +39,11 @@ namespace utils {
     Error witnessTargets(std::shared_ptr<tuf::Repo> repo, 
                         std::shared_ptr<tuf::Repo> invalid, 
                         RoleName scope);
+
+    // getAllPrivKeys函数声明 (对应Go的getAllPrivKeys函数)
+    Result<std::vector<std::shared_ptr<crypto::PrivateKey>>> getAllPrivKeys(
+        const std::vector<std::string>& rootKeyIDs, 
+        std::shared_ptr<crypto::CryptoService> cryptoService);
 
 }
 }

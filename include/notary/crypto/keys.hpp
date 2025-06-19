@@ -80,6 +80,30 @@ public:
         : TUFKey(keyType, publicKey, privateKey) {}
 };
 
+// ECDSAx509PublicKey represents an ECDSA key using an x509 cert
+// as the serialized format of the public key
+class ECDSAx509PublicKey : public TUFKey {
+public:
+    ECDSAx509PublicKey(const std::vector<uint8_t>& x509Data)
+        : TUFKey(ECDSA_X509_KEY, x509Data, std::vector<uint8_t>()) {}
+};
+
+// RSAPublicKey represents an RSA key using a raw serialization
+// of the public key
+class RSAPublicKey : public TUFKey {
+public:
+    RSAPublicKey(const std::vector<uint8_t>& publicKey)
+        : TUFKey(RSA_KEY, publicKey, std::vector<uint8_t>()) {}
+};
+
+// RSAx509PublicKey represents an RSA key using an x509 cert
+// as the serialized format of the public key
+class RSAx509PublicKey : public TUFKey {
+public:
+    RSAx509PublicKey(const std::vector<uint8_t>& x509Data)
+        : TUFKey(RSA_X509_KEY, x509Data, std::vector<uint8_t>()) {}
+};
+
 // ECDAPrivateKey is a private key for ECDSA
 class ECDSAPrivateKey : public PrivateKey {  // PrivateKey继承自PublicKey
 public:
@@ -110,6 +134,14 @@ private:
 // 工厂函数
 std::shared_ptr<PublicKey> NewPublicKey(const std::string& algorithm, const std::vector<uint8_t>& publicData);
 std::shared_ptr<PrivateKey> NewPrivateKey(std::shared_ptr<PublicKey> publicKey, const std::vector<uint8_t>& privateData);
+
+// 工厂函数：创建特定类型的公钥（对应Go版本的NewECDSAPublicKey和NewRSAPublicKey）
+std::shared_ptr<ECDSAPublicKey> NewECDSAPublicKey(const std::vector<uint8_t>& publicData);
+std::shared_ptr<RSAPublicKey> NewRSAPublicKey(const std::vector<uint8_t>& publicData);
+
+// 工厂函数：创建x509公钥
+std::shared_ptr<PublicKey> NewRSAx509PublicKey(const std::vector<uint8_t>& x509Data);
+std::shared_ptr<PublicKey> NewECDSAx509PublicKey(const std::vector<uint8_t>& x509Data);
 
 } // namespace crypto
 } // namespace notary

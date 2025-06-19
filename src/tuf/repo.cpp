@@ -519,9 +519,12 @@ void SignedRoot::fromJson(const json& j) {
 Result<std::shared_ptr<notary::tuf::Signed>> SignedRoot::ToSigned() const {
     // 对内部Signed结构进行规范化JSON编码（类似Go的MarshalCanonical）
     json signedJson = Signed.toJson();
-    
+    utils::GetLogger().Info("SignedRoot::ToSigned() signedJson_", utils::LogContext()
+        .With("signedJson_", signedJson.dump()));
     // 生成规范化的JSON字符串（sorted keys, no whitespace）
     std::string canonicalJson = signedJson.dump(-1, ' ', false, json::error_handler_t::strict);
+    utils::GetLogger().Info("SignedRoot::ToSigned() canonicalJson_", utils::LogContext()
+        .With("canonicalJson_", canonicalJson));
     
     // 转换为字节数组
     std::vector<uint8_t> signedBytes(canonicalJson.begin(), canonicalJson.end());
@@ -540,6 +543,8 @@ Result<std::shared_ptr<notary::tuf::Signed>> SignedRoot::ToSigned() const {
 
 std::vector<uint8_t> SignedRoot::Serialize() const {
     std::string jsonStr = toJson().dump();
+    utils::GetLogger().Info("SignedRoot::Serialize() root_", utils::LogContext()
+        .With("root_", jsonStr));
     return std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
 }
 
@@ -1440,7 +1445,7 @@ Result<std::shared_ptr<Signed>> Repo::SignRoot(const std::chrono::time_point<std
     }
     
     // 复制当前Root对象，避免直接修改
-    auto rootBytes = root_->Serialize();
+    auto rootBytes = root_->Serialize(); //
     if (rootBytes.empty()) {
         return Result<std::shared_ptr<Signed>>(Error("Failed to serialize current root"));
     }
@@ -1469,7 +1474,7 @@ Result<std::shared_ptr<Signed>> Repo::SignRoot(const std::chrono::time_point<std
     tempRoot->Signed.Common.Expires = expires;
     tempRoot->Signed.Common.Version++;
     rolesToSignWith.push_back(currRoot);
-    
+
     // 转换为Signed对象进行签名
     auto signedResult = tempRoot->ToSigned();
     if (!signedResult.ok()) {

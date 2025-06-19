@@ -3,11 +3,15 @@
 #include "notary/tuf/builder.hpp"
 #include "notary/utils/tools.hpp"
 #include "notary/crypto/keys.hpp"
+#include "notary/crypto/certificate.hpp"
+#include "notary/crypto/verify.hpp"
+#include "notary/utils/x509.hpp"
 #include "notary/utils/helpers.hpp"
 #include "notary/changelist/changelist.hpp"
 #include "notary/storage/key_storage.hpp"
 #include "notary/storage/metadata_store.hpp"
 #include "notary/passRetriever/passRetriever.hpp"
+#include <set>
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <chrono>
@@ -102,14 +106,14 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     {
     // 初始化cryptoService_
     // 定义一个简单的 PassRetriever，表示无密码
-    // auto passRetriever = [](const std::string& keyName,
-    //                               const std::string& alias,
-    //                               bool createNew,
-    //                               int attempts) -> std::tuple<std::string, bool, Error> {
-    //     // 返回空密码（""），不放弃（false），无错误（Error()）
-    //     return std::make_tuple("", false, Error());
-    // };
-    auto passRetriever = passphrase::PromptRetriever();
+    auto passRetriever = [](const std::string& keyName,
+                                  const std::string& alias,
+                                  bool createNew,
+                                  int attempts) -> std::tuple<std::string, bool, Error> {
+        // 返回空密码（""），不放弃（false），无错误（Error()）
+        return std::make_tuple("", false, Error());
+    };
+    // auto passRetriever = passphrase::PromptRetriever();
     std::unique_ptr<storage::GenericKeyStore> keyStores = notary::storage::GenericKeyStore::NewKeyFileStore(trustDir+"/private", passRetriever);
     cryptoService_ = std::make_shared<crypto::CryptoService>(std::vector<std::shared_ptr<storage::GenericKeyStore>>{std::move(keyStores)});
     
@@ -120,6 +124,7 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
 
 
 Error Repository::Initialize(const std::vector<std::string>& rootKeyIDs,
+                           const std::vector<std::shared_ptr<crypto::PublicKey>>& rootCerts,
                            const std::vector<RoleName>& serverManagedRoles) {
     // 验证服务器管理的角色
     std::vector<RoleName> remoteRoles = {RoleName::TimestampRole}; // timestamp总是由服务器管理
@@ -139,31 +144,34 @@ Error Repository::Initialize(const std::vector<std::string>& rootKeyIDs,
         }
     }
 
-    // 获取或创建根密钥
-    std::vector<std::shared_ptr<crypto::PublicKey>> rootKeys;
+    // 获取根密钥 (对应Go版本的获取根密钥逻辑)
+    // - 如果没有提供 rootCerts，则通过 createNewPublicKeyFromKeyIDs 方法生成新的公钥。
+    // - 如果提供了 rootCerts，则通过 publicKeysOfKeyIDs 方法验证公钥和私钥是否匹配。
+    std::vector<std::shared_ptr<crypto::PublicKey>> publicKeys;
     
-    // 如果提供了根密钥ID，使用这些ID获取密钥
-    if (!rootKeyIDs.empty()) {
-        for (const auto& keyID : rootKeyIDs) {
-            auto key = cryptoService_->GetKey(keyID);
-            rootKeys.push_back(key);
+    if (rootCerts.empty()) {
+        // 使用createNewPublicKeyFromKeyIDs生成新公钥 (对应Go的r.createNewPublicKeyFromKeyIDs(rootKeyIDs))
+        auto publicKeysResult = createNewPublicKeyFromKeyIDs(rootKeyIDs);
+        if (!publicKeysResult.ok()) {
+            return Error("Failed to create new public keys from key IDs: " + publicKeysResult.error().what());
         }
+        publicKeys = publicKeysResult.value();
     } else {
-        // 如果没有提供根密钥ID，自动创建一个新的根密钥
-        auto publicKeyResult = cryptoService_->Create(RoleName::RootRole, gun_, ECDSA_KEY);
-        if (!publicKeyResult.ok()) {
-            return Error("Failed to create root key: " + publicKeyResult.error().what());
+        // 使用publicKeysOfKeyIDs验证公钥和私钥匹配 (对应Go的r.publicKeysOfKeyIDs(rootKeyIDs, rootCerts))
+        auto publicKeysResult = publicKeysOfKeyIDs(rootKeyIDs, rootCerts);
+        if (!publicKeysResult.ok()) {
+            return Error("Failed to validate public keys of key IDs: " + publicKeysResult.error().what());
         }
-        rootKeys.push_back(publicKeyResult.value());
+        publicKeys = publicKeysResult.value();
     }
     
     // 确保至少有一个根密钥
-    if (rootKeys.empty()) {
+    if (publicKeys.empty()) {
         return Error("No root keys available");
     }
 
     // 初始化角色
-    auto [root, targets, snapshot, timestamp] = initializeRoles(rootKeys, localRoles, remoteRoles);
+    auto [root, targets, snapshot, timestamp] = initializeRoles(publicKeys, localRoles, remoteRoles);
 
     // 初始化内存中的TUF Repo对象
     tufRepo_ = std::make_shared<tuf::Repo>(cryptoService_);
@@ -1196,6 +1204,199 @@ Error Repository::RemoveTarget(const std::string& targetName, const std::vector<
         
     } catch (const std::exception& e) {
         return Error(std::string("Failed to remove target: ") + e.what());
+    }
+}
+
+// rootCertKey函数实现 - 对应Go版本的rootCertKey函数
+// 根据给定的私钥和GUN生成根证书，并从证书中提取公钥
+std::shared_ptr<crypto::PublicKey> rootCertKey(const std::string& gun, std::shared_ptr<crypto::PrivateKey> privKey) {
+    if (!privKey) {
+        utils::GetLogger().Error("Private key is null in rootCertKey");
+        return nullptr;
+    }
+    
+    // 硬编码策略：生成的证书在10年后过期 (对应Go版本的Hard-coded policy: the generated certificate expires in 10 years)
+    auto startTime = std::chrono::system_clock::now();
+    auto endTime = startTime + std::chrono::hours(24 * 365 * 10); // 10年 (对应Go版本的notary.Year*10)
+    
+    try {
+        // 生成证书 (对应Go版本的cryptoservice.GenerateCertificate)
+        auto cert = notary::crypto::GenerateCertificate(privKey, gun, startTime, endTime);
+        if (!cert) {
+            utils::GetLogger().Error("Failed to generate certificate", 
+                utils::LogContext()
+                    .With("gun", gun)
+                    .With("privateKeyID", privKey->ID())
+                    .With("algorithm", privKey->Algorithm()));
+            return nullptr;
+        }
+
+        // 从生成的证书中提取X509公钥 (对应Go版本的utils.CertToKey(cert))
+        auto x509PublicKey = notary::utils::CertToKey(*cert);
+        if (!x509PublicKey) {
+            utils::GetLogger().Error("Cannot generate public key from private key", 
+                utils::LogContext()
+                    .With("privateKeyID", privKey->ID())
+                    .With("algorithm", privKey->Algorithm())
+                    .With("gun", gun));
+            return nullptr;
+        }
+
+        // 注意：证书公钥ID与原始私钥ID不一致是正常的，因为证书包含了额外信息
+        utils::GetLogger().Info("Successfully generated root certificate and extracted public key", 
+            utils::LogContext()
+                .With("gun", gun)
+                .With("privateKeyID", privKey->ID())
+                .With("certificatePublicKeyID", x509PublicKey->ID())
+                .With("algorithm", x509PublicKey->Algorithm()));
+
+        return x509PublicKey;
+
+    } catch (const std::exception& e) {
+        utils::GetLogger().Error("Exception in rootCertKey", 
+            utils::LogContext()
+                .With("gun", gun)
+                .With("keyID", privKey->ID())
+                .With("error", e.what()));
+        return nullptr;
+    }
+}
+
+// createNewPublicKeyFromKeyIDs函数实现 - 对应Go版本的createNewPublicKeyFromKeyIDs函数
+// 根据给定的密钥ID列表生成一组对应的公钥
+// 这些密钥ID存在于仓库的CryptoService中
+// 返回的公钥顺序与输入的keyIDs顺序一一对应
+Result<std::vector<std::shared_ptr<crypto::PublicKey>>> Repository::createNewPublicKeyFromKeyIDs(
+    const std::vector<std::string>& keyIDs) {
+    
+    try {
+        // 初始化一个空的公钥向量 (对应Go的publicKeys := []data.PublicKey{})
+        std::vector<std::shared_ptr<crypto::PublicKey>> publicKeys;
+        
+        // 从CryptoService中获取所有私钥 (对应Go的privKeys, err := getAllPrivKeys(keyIDs, r.GetCryptoService()))
+        auto privKeysResult = utils::getAllPrivKeys(keyIDs, cryptoService_);
+        if (!privKeysResult.ok()) {
+            return Error("Failed to get private keys: " + privKeysResult.error().what());
+        }
+        
+        auto privKeys = privKeysResult.value();
+        
+        // 预留空间以提高性能
+        publicKeys.reserve(privKeys.size());
+        
+        // 遍历每个私钥，生成对应的根证书公钥 (对应Go的for _, privKey := range privKeys)
+        for (const auto& privKey : privKeys) {
+            // 根据GUN和私钥生成根证书公钥 (对应Go的rootKey, err := rootCertKey(r.gun, privKey))
+            auto rootKey = rootCertKey(gun_.empty() ? "default" : gun_, privKey);
+            if (!rootKey) {
+                return Error("Failed to generate root certificate key for private key: " + privKey->ID());
+            }
+            
+            // 将生成的公钥添加到结果向量中 (对应Go的publicKeys = append(publicKeys, rootKey))
+            publicKeys.push_back(rootKey);
+        }
+        
+        utils::GetLogger().Debug("Successfully created public keys from key IDs", 
+            utils::LogContext()
+                .With("keyIDCount", std::to_string(keyIDs.size()))
+                .With("publicKeyCount", std::to_string(publicKeys.size()))
+                .With("gun", gun_.empty() ? "default" : gun_));
+        
+        return publicKeys;
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Exception in createNewPublicKeyFromKeyIDs: ") + e.what());
+    }
+}
+
+// matchKeyIdsWithPubKeys函数实现 - 对应Go版本的matchKeyIdsWithPubKeys函数
+// 验证私钥（通过其ID表示）和公钥形成匹配的密钥对
+Error Repository::matchKeyIdsWithPubKeys(const std::vector<std::string>& ids, 
+                                        const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys) {
+    // 检查输入参数有效性
+    if (ids.size() != pubKeys.size()) {
+        return Error("Number of key IDs and public keys must match");
+    }
+    
+    try {
+        // 遍历所有密钥ID和公钥对 (对应Go的for i := 0; i < len(ids); i++)
+        for (size_t i = 0; i < ids.size(); i++) {
+            const std::string& keyID = ids[i];
+            auto pubKey = pubKeys[i];
+            
+            if (!pubKey) {
+                return Error("Public key at index " + std::to_string(i) + " is null");
+            }
+            
+            // 从CryptoService获取对应的私钥 (对应Go的privKey, _, err := r.GetCryptoService().GetPrivateKey(ids[i]))
+            auto privateKeyResult = cryptoService_->GetPrivateKey(keyID);
+            if (!privateKeyResult.ok()) {
+                return Error("Could not get the private key matching id " + keyID + ": " + 
+                           privateKeyResult.error().what());
+            }
+            
+            auto [privKey, role] = privateKeyResult.value();
+            if (!privKey) {
+                return Error("Retrieved private key is null for ID: " + keyID);
+            }
+            
+            // 验证私钥和公钥是否匹配 (对应Go的signed.VerifyPublicKeyMatchesPrivateKey(privKey, pubKey))
+            auto verifyErr = crypto::VerifyPublicKeyMatchesPrivateKey(privKey, pubKey);
+            if (verifyErr.hasError()) {
+                return Error("Private key and public key do not match for ID " + keyID + ": " + 
+                           verifyErr.what());
+            }
+            
+            utils::GetLogger().Debug("Successfully verified key pair", 
+                utils::LogContext()
+                    .With("keyID", keyID)
+                    .With("index", std::to_string(i)));
+        }
+        
+        utils::GetLogger().Debug("All key pairs verified successfully", 
+            utils::LogContext()
+                .With("keyCount", std::to_string(ids.size())));
+        
+        return Error(); // 成功
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Exception in matchKeyIdsWithPubKeys: ") + e.what());
+    }
+}
+
+// publicKeysOfKeyIDs函数实现 - 对应Go版本的publicKeysOfKeyIDs函数
+// 确认公钥和私钥（通过密钥ID）形成有效的、严格有序的密钥对
+// (例如 keyIDs[0] 必须匹配 pubKeys[0]，keyIDs[1] 必须匹配 pubKeys[1]，以此类推)
+// 或者在不匹配时抛出错误
+Result<std::vector<std::shared_ptr<crypto::PublicKey>>> Repository::publicKeysOfKeyIDs(
+    const std::vector<std::string>& keyIDs, 
+    const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys) {
+    
+    try {
+        // 检查密钥ID和公钥数量是否匹配 (对应Go的if len(keyIDs) != len(pubKeys))
+        if (keyIDs.size() != pubKeys.size()) {
+            return Error("Require matching number of keyIDs and public keys but got " + 
+                        std::to_string(keyIDs.size()) + " IDs and " + 
+                        std::to_string(pubKeys.size()) + " public keys");
+        }
+        
+        // 验证密钥ID和公钥是否匹配 (对应Go的matchKeyIdsWithPubKeys(r, keyIDs, pubKeys))
+        auto matchErr = matchKeyIdsWithPubKeys(keyIDs, pubKeys);
+        if (matchErr.hasError()) {
+            return Error("Could not obtain public key from IDs: " + matchErr.what());
+        }
+        
+        utils::GetLogger().Info("Successfully validated public keys of key IDs", 
+            utils::LogContext()
+                .With("keyIDCount", std::to_string(keyIDs.size()))
+                .With("publicKeyCount", std::to_string(pubKeys.size()))
+                .With("gun", gun_.empty() ? "default" : gun_));
+        
+        // 返回验证后的公钥列表 (对应Go的return pubKeys, nil)
+        return pubKeys;
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Exception in publicKeysOfKeyIDs: ") + e.what());
     }
 }
 

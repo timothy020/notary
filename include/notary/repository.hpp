@@ -113,6 +113,7 @@ public:
     
     // 初始化仓库
     Error Initialize(const std::vector<std::string>& rootKeyIDs,
+                    const std::vector<std::shared_ptr<crypto::PublicKey>>& rootCerts = {},
                     const std::vector<RoleName>& serverManagedRoles = {});
     
     // 获取加密服务
@@ -174,6 +175,27 @@ private:
 
     // 签署targets
     Error signTargets(std::map<std::string, std::vector<uint8_t>>& updates, bool initialPublish);
+
+    // createNewPublicKeyFromKeyIDs函数声明 - 对应Go版本的createNewPublicKeyFromKeyIDs函数
+    // 根据给定的密钥ID列表生成一组对应的公钥
+    // 这些密钥ID存在于仓库的CryptoService中
+    // 返回的公钥顺序与输入的keyIDs顺序一一对应
+    Result<std::vector<std::shared_ptr<crypto::PublicKey>>> createNewPublicKeyFromKeyIDs(
+        const std::vector<std::string>& keyIDs);
+
+    // publicKeysOfKeyIDs函数声明 - 对应Go版本的publicKeysOfKeyIDs函数  
+    // 确认公钥和私钥（通过密钥ID）形成有效的、严格有序的密钥对
+    // (例如 keyIDs[0] 必须匹配 pubKeys[0]，keyIDs[1] 必须匹配 pubKeys[1]，以此类推)
+    // 或者在不匹配时抛出错误
+    Result<std::vector<std::shared_ptr<crypto::PublicKey>>> publicKeysOfKeyIDs(
+        const std::vector<std::string>& keyIDs, 
+        const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys);
+
+    // matchKeyIdsWithPubKeys函数声明 - 对应Go版本的matchKeyIdsWithPubKeys函数
+    // 验证私钥（通过其ID表示）和公钥形成匹配的密钥对
+    Error matchKeyIdsWithPubKeys(const std::vector<std::string>& ids, 
+                                const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys);
+
 
 private:
     GUN gun_;

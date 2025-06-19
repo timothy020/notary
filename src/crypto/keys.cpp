@@ -130,8 +130,14 @@ std::string ECDSAPrivateKey::GetSignatureAlgorithm() const {
 std::shared_ptr<PublicKey> NewPublicKey(const std::string& algorithm, const std::vector<uint8_t>& publicData) {
     if (algorithm == ECDSA_KEY) {
         return std::make_shared<ECDSAPublicKey>(publicData);
+    } else if (algorithm == ECDSA_X509_KEY) {
+        return std::make_shared<ECDSAx509PublicKey>(publicData);
+    } else if (algorithm == RSA_KEY) {
+        return std::make_shared<RSAPublicKey>(publicData);
+    } else if (algorithm == RSA_X509_KEY) {
+        return std::make_shared<RSAx509PublicKey>(publicData);
     } else {
-        throw std::runtime_error("未知密钥类型");
+        throw std::runtime_error("Unsupported key type: " + algorithm);
     }
 }
 
@@ -149,6 +155,25 @@ std::shared_ptr<PrivateKey> NewPrivateKey(std::shared_ptr<PublicKey> publicKey, 
     } else {
         throw std::runtime_error("未知密钥类型");
     }
+}
+
+// 工厂函数：创建ECDSA公钥（对应Go版本的NewECDSAPublicKey）
+std::shared_ptr<ECDSAPublicKey> NewECDSAPublicKey(const std::vector<uint8_t>& publicData) {
+    return std::make_shared<ECDSAPublicKey>(publicData);
+}
+
+// 工厂函数：创建RSA公钥（对应Go版本的NewRSAPublicKey）
+std::shared_ptr<RSAPublicKey> NewRSAPublicKey(const std::vector<uint8_t>& publicData) {
+    return std::make_shared<RSAPublicKey>(publicData);
+}
+
+// 工厂函数：创建x509公钥
+std::shared_ptr<PublicKey> NewRSAx509PublicKey(const std::vector<uint8_t>& x509Data) {
+    return std::make_shared<RSAx509PublicKey>(x509Data);
+}
+
+std::shared_ptr<PublicKey> NewECDSAx509PublicKey(const std::vector<uint8_t>& x509Data) {
+    return std::make_shared<ECDSAx509PublicKey>(x509Data);
 }
 
 // // ECDSAPublicKey实现

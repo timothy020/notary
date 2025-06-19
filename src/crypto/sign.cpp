@@ -1,3 +1,4 @@
+#include "notary/utils/x509.hpp"
 #include "notary/crypto/sign.hpp"
 #include <map>
 #include <set>
@@ -29,18 +30,23 @@ Error Sign(std::shared_ptr<CryptoService> service, std::shared_ptr<tuf::Signed> 
     std::vector<std::string> missingKeyIDs;
     
     for (const auto& key : signingKeys) {
-        std::string keyID = key->ID();
-        tufIDs[keyID] = key;
-        
+        // 先获取canonicalID（
+        std::string canonicalID = utils::CanonicalKeyID(key);
+        if (canonicalID.empty()) {  // 空字符串表示错误
+            return Error("Failed to get canonical key ID");
+        }
+
+        tufIDs[key->ID()] = key;
+
         // 从CryptoService获取私钥
-        auto privateKeyResult = service->GetPrivateKey(keyID);
+        auto privateKeyResult = service->GetPrivateKey(canonicalID);
         if (!privateKeyResult.ok()) {
-            missingKeyIDs.push_back(keyID);
+            missingKeyIDs.push_back(canonicalID);
             continue;
         }
         
         auto [privateKey, keyRole] = privateKeyResult.value();
-        privKeys[keyID] = privateKey;
+        privKeys[key->ID()] = privateKey;
     }
     
     // 包含otherWhitelistedKeys列表
@@ -77,7 +83,7 @@ Error Sign(std::shared_ptr<CryptoService> service, std::shared_ptr<tuf::Signed> 
         
         signatures.push_back(signature);
     }
-    
+
     // TODO:清理并保留已有签名（允许旧签名）
     for (const auto& sig : s->Signatures) {
         // 如果这个签名是新生成的，跳过

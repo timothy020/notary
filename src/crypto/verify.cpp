@@ -1,6 +1,7 @@
 #include "notary/crypto/verify.hpp"
 #include "notary/crypto/verifiers.hpp"
 #include "notary/utils/tools.hpp"
+#include "notary/utils/x509.hpp"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -132,24 +133,43 @@ Error VerifySignature(const std::vector<uint8_t>& msg,
     return Error();
 }
 
-// VerifyPublicKeyMatchesPrivateKey 检查私钥和公钥是否形成有效的密钥对
+// VerifyPublicKeyMatchesPrivateKey checks if the private key and the public keys forms valid key pairs.
+// Supports both x509 certificate PublicKeys and non-certificate PublicKeys
+// 对应Go版本的signed.VerifyPublicKeyMatchesPrivateKey函数
 Error VerifyPublicKeyMatchesPrivateKey(std::shared_ptr<PrivateKey> privKey, 
                                       std::shared_ptr<PublicKey> pubKey) {
+    // 检查私钥是否为空（对应Go版本的 privKey == nil）
     if (!privKey) {
-        return Error("private key is nil");
+        return Error("private key is nil or does not match public key");
     }
     
+    // 检查公钥是否为空
     if (!pubKey) {
         return Error("public key is nil");
     }
     
-    // TODO: 实现canonical key ID计算
-    // 这需要使用utils库中的CanonicalKeyID函数
-    
-    if (privKey->ID() != pubKey->ID()) {
-        return Error("private key does not match public key");
+    // 获取公钥的规范化ID（对应Go版本的 utils.CanonicalKeyID(pubKey)）
+    std::string pubKeyID = utils::CanonicalKeyID(pubKey);
+    if (pubKeyID.empty()) {
+        return Error("could not verify key pair: failed to get canonical key ID");
     }
     
+    // 获取私钥的ID
+    std::string privKeyID = privKey->ID();
+    if (privKeyID.empty()) {
+        return Error("could not verify key pair: private key ID is empty");
+    }
+    
+    // 比较规范化的公钥ID与私钥ID（对应Go版本的 pubKeyID != privKey.ID()）
+    if (pubKeyID != privKeyID) {
+        utils::GetLogger().Debug("Key ID mismatch - Public key canonical ID: " + pubKeyID + 
+                                ", Private key ID: " + privKeyID);
+        return Error("private key is nil or does not match public key");
+    }
+    
+    utils::GetLogger().Debug("Successfully verified public key matches private key, ID: " + pubKeyID);
+    
+    // 成功时返回空错误（对应Go版本的 return nil）
     return Error();
 }
 

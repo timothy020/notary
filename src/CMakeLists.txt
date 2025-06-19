@@ -19,6 +19,7 @@ add_library(notary_lib
     crypto/sign.cpp
     crypto/verify.cpp
     crypto/verifiers.cpp
+    crypto/certificate.cpp
     main.cpp
     repository.cpp
     storage/metadata_store.cpp
@@ -32,6 +33,7 @@ add_library(notary_lib
     utils/logger.cpp
     utils/tools.cpp
     utils/helpers.cpp
+    utils/x509.cpp
     changelist/changelist.cpp
     passRetriever/passRetriever.cpp
     types.cpp

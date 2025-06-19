@@ -215,29 +215,74 @@ std::vector<uint8_t> Base64Decode(const std::string& base64) {
 
 // 将私钥转换为EVPKey
 EVP_PKEY* ConvertPrivateKeyToEVPKey(std::shared_ptr<crypto::PrivateKey> privKey) {
-    auto privateData = privKey->Private();
-    std::string algorithm = privKey->Algorithm();
-    
-    EVP_PKEY* pkey = EVP_PKEY_new();
-    if (!pkey) return nullptr;
-    
-    if (algorithm == "rsa" || algorithm == "rsa-x509") {
-        const unsigned char* p = privateData.data();
-        RSA* rsa = d2i_RSAPrivateKey(nullptr, &p, privateData.size());
-        if (!rsa || EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
-            EVP_PKEY_free(pkey);
-            return nullptr;
-        }
-    } else if (algorithm == "ecdsa" || algorithm == "ecdsa-x509") {
-        const unsigned char* p = privateData.data();
-        EC_KEY* ec = d2i_ECPrivateKey(nullptr, &p, privateData.size());
-        if (!ec || EVP_PKEY_assign_EC_KEY(pkey, ec) != 1) {
-            EVP_PKEY_free(pkey);
-            return nullptr;
-        }
+    if (!privKey) {
+        return nullptr;
     }
     
-    return pkey;
+    std::string algorithm = privKey->Algorithm();
+    
+    if (algorithm == ECDSA_KEY || algorithm == ECDSA_X509_KEY) {
+        // 处理ECDSA密钥
+        auto privateData = privKey->Private();
+        
+        // 从DER格式解析ECDSA私钥
+        const unsigned char* p = privateData.data();
+        EC_KEY* ecKey = d2i_ECPrivateKey(nullptr, &p, privateData.size());
+        if (!ecKey) {
+            return nullptr;
+        }
+        
+        // 创建EVP_PKEY并设置EC_KEY
+        EVP_PKEY* pkey = EVP_PKEY_new();
+        if (!pkey || EVP_PKEY_set1_EC_KEY(pkey, ecKey) != 1) {
+            if (pkey) EVP_PKEY_free(pkey);
+            EC_KEY_free(ecKey);
+            return nullptr;
+        }
+        
+        EC_KEY_free(ecKey); // EVP_PKEY_set1_EC_KEY会增加引用计数，所以这里可以释放
+        return pkey;
+        
+    } else if (algorithm == RSA_KEY || algorithm == RSA_X509_KEY) {
+        // 处理RSA密钥
+        auto privateData = privKey->Private();
+        
+        // 从DER格式解析RSA私钥
+        const unsigned char* p = privateData.data();
+        RSA* rsaKey = d2i_RSAPrivateKey(nullptr, &p, privateData.size());
+        if (!rsaKey) {
+            return nullptr;
+        }
+        
+        // 创建EVP_PKEY并设置RSA
+        EVP_PKEY* pkey = EVP_PKEY_new();
+        if (!pkey || EVP_PKEY_set1_RSA(pkey, rsaKey) != 1) {
+            if (pkey) EVP_PKEY_free(pkey);
+            RSA_free(rsaKey);
+            return nullptr;
+        }
+        
+        RSA_free(rsaKey); // EVP_PKEY_set1_RSA会增加引用计数，所以这里可以释放
+        return pkey;
+        
+    } else if (algorithm == ED25519_KEY) {
+        // 处理ED25519密钥
+        auto privateData = privKey->Private();
+        
+        // ED25519私钥应该是32字节的种子
+        if (privateData.size() < 32) {
+            return nullptr;
+        }
+        
+        // 创建ED25519私钥
+        EVP_PKEY* pkey = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, nullptr, 
+                                                      privateData.data(), 32);
+        return pkey; // 成功或失败都直接返回
+        
+    } else {
+        // 不支持的密钥类型
+        return nullptr;
+    }
 }
 
 

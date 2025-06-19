@@ -377,5 +377,69 @@ std::vector<RoleName> roleNameSliceRemove(const std::vector<RoleName>& roles, Ro
     return result;
 }
 
+// getAllPrivKeys函数实现 (对应Go的getAllPrivKeys函数)
+Result<std::vector<std::shared_ptr<crypto::PrivateKey>>> getAllPrivKeys(
+    const std::vector<std::string>& rootKeyIDs, 
+    std::shared_ptr<crypto::CryptoService> cryptoService) {
+    
+    // 1. 验证加密服务是否可用 (对应Go的if cryptoService == nil)
+    if (!cryptoService) {
+        return Result<std::vector<std::shared_ptr<crypto::PrivateKey>>>(
+            Error("no crypto service available to get private keys from"));
+    }
+
+    // 2. 从指定的rootKeyIDs获取私钥 (对应Go的for _, keyID := range rootKeyIDs)
+    std::vector<std::shared_ptr<crypto::PrivateKey>> privKeys;
+    privKeys.reserve(rootKeyIDs.size());
+    
+    for (const std::string& keyID : rootKeyIDs) {
+        // 获取私钥 (对应Go的privKey, _, err := cryptoService.GetPrivateKey(keyID))
+        auto privateKeyResult = cryptoService->GetPrivateKey(keyID);
+        if (!privateKeyResult.ok()) {
+            return Result<std::vector<std::shared_ptr<crypto::PrivateKey>>>(
+                privateKeyResult.error());
+        }
+        
+        auto [privKey, role] = privateKeyResult.value();
+        privKeys.push_back(privKey);
+    }
+    
+    // 3. 如果没有指定rootKeyIDs，则尝试获取或创建新的根密钥 (对应Go的if len(privKeys) == 0)
+    if (privKeys.empty()) {
+        std::string rootKeyID;
+        
+        // 3.1 获取现有的根密钥列表 (对应Go的rootKeyList := cryptoService.ListKeys(data.CanonicalRootRole))
+        std::vector<std::string> rootKeyList = cryptoService->ListKeys(RoleName::RootRole);
+        
+        if (rootKeyList.empty()) {
+            // 3.2 如果没有根密钥，创建一个新的ECDSA密钥 (对应Go的cryptoService.Create)
+            auto createResult = cryptoService->Create(RoleName::RootRole, "", ECDSA_KEY);
+            if (!createResult.ok()) {
+                return Result<std::vector<std::shared_ptr<crypto::PrivateKey>>>(
+                    createResult.error());
+            }
+            
+            // 获取创建的公钥的ID (对应Go的rootKeyID = rootPublicKey.ID())
+            rootKeyID = createResult.value()->ID();
+            
+        } else {
+            // 3.3 如果有现有的根密钥，使用第一个 (对应Go的rootKeyID = rootKeyList[0])
+            rootKeyID = rootKeyList[0];
+        }
+        
+        // 3.4 获取对应的私钥 (对应Go的privKey, _, err := cryptoService.GetPrivateKey(rootKeyID))
+        auto privateKeyResult = cryptoService->GetPrivateKey(rootKeyID);
+        if (!privateKeyResult.ok()) {
+            return Result<std::vector<std::shared_ptr<crypto::PrivateKey>>>(
+                privateKeyResult.error());
+        }
+        
+        auto [privKey, role] = privateKeyResult.value();
+        privKeys.push_back(privKey);
+    }
+    
+    return Result<std::vector<std::shared_ptr<crypto::PrivateKey>>>(privKeys);
+}
+
 }
 }
