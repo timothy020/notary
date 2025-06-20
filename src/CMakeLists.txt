@@ -3,7 +3,7 @@ file(GLOB_RECURSE SOURCES
     "*.cpp"
     "cmd/*.cpp"
     "crypto/*.cpp"
-    "repository/*.cpp"
+    "client/*.cpp"
     "storage/*.cpp"
     "config/*.cpp"
     "utils/*.cpp"
@@ -21,7 +21,7 @@ add_library(notary_lib
     crypto/verifiers.cpp
     crypto/certificate.cpp
     main.cpp
-    repository.cpp
+    client/repository.cpp
     storage/metadata_store.cpp
     storage/key_storage.cpp
     storage/storage.cpp

@@ -1,4 +1,4 @@
-#include "notary/repository.hpp"
+#include "notary/client/repository.hpp"
 #include "notary/tuf/repo.hpp"
 #include "notary/tuf/builder.hpp"
 #include "notary/utils/tools.hpp"

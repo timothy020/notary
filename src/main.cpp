@@ -1,7 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <CLI/CLI.hpp>
-#include "notary/repository.hpp"
+#include "notary/client/repository.hpp"
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
