@@ -1,5 +1,6 @@
 #include "notary/tuf/builder.hpp"
 #include "notary/tuf/repo.hpp"
+#include "notary/tuf/certs.hpp"
 #include "notary/crypto/crypto_service.hpp"
 #include "notary/crypto/verify.hpp"
 #include "notary/utils/tools.hpp"
@@ -477,50 +478,56 @@ Error RepoBuilderImpl::loadRoot(const std::vector<uint8_t>& content, int minVers
     RoleName roleName = RoleName::RootRole;
 
     // 1. 转换字节到Signed对象并检查校验和（如果不跳过）
+    // 对应Go版本的：signedObj, err := rb.bytesToSigned(content, data.CanonicalRootRole, skipChecksum)
     auto signedResult = bytesToSigned(content, roleName, skipChecksum);
     if (!signedResult.ok()) {
+        utils::GetLogger().Error("loadRoot: Failed to convert bytes to Signed object: " + signedResult.error().getMessage());
         return signedResult.error();
     }
-
-    //TODO: 验证root trustping:  signedRoot, err := trustpinning.ValidateRoot(rb.prevRoot, signedObj, rb.gun, rb.trustpin)
     auto signedObj = signedResult.value();
 
-    // 2. 验证Root - 等价于Go版本的trustpinning.ValidateRoot
-    // 这包括验证签名、验证与之前root的一致性等
-    auto signedRoot = validateRootIntegrity(signedObj);
-    if (!signedRoot.ok()) {
-        return signedRoot.error();
+    // 2. 使用trustpinning.ValidateRoot验证root（包括trust pinning验证）
+    // 这是核心验证步骤，对应Go版本的：
+    // signedRoot, err := trustpinning.ValidateRoot(rb.prevRoot, signedObj, rb.gun, rb.trustpin)
+    auto signedRootResult = tuf::ValidateRoot(prevRoot_, signedObj, gun_, trustpin_);
+    if (!signedRootResult.ok()) {
+        utils::GetLogger().Error("loadRoot: ValidateRoot failed: " + signedRootResult.error().getMessage());
+        return signedRootResult.error();
     }
+    auto signedRoot = signedRootResult.value();
 
-    auto validatedRoot = signedRoot.value();
-
-    // 3. 验证版本
-    Error versionErr = crypto::VerifyVersion(validatedRoot->Signed.Common, minVersion);
+    // 3. 验证版本（对应Go版本的signed.VerifyVersion）
+    Error versionErr = crypto::VerifyVersion(signedRoot->Signed.Common, minVersion);
     if (versionErr.hasError()) {
+        utils::GetLogger().Error("loadRoot: Version verification failed: " + versionErr.getMessage());
         return versionErr;
     }
 
     // 4. 检查过期时间（必须放在最后，因为所有其他验证都应该通过）
+    // 对应Go版本的：if !allowExpired { if err := signed.VerifyExpiry(...); err != nil }
     if (!allowExpired) {
-        Error expiryErr = crypto::VerifyExpiry(validatedRoot->Signed.Common, roleName);
+        Error expiryErr = crypto::VerifyExpiry(signedRoot->Signed.Common, roleName);
         if (expiryErr.hasError()) {
+            utils::GetLogger().Error("loadRoot: Expiry verification failed: " + expiryErr.getMessage());
             return expiryErr;
         }
     }
 
-    // 5. 从验证过的root构建BaseRole
-    auto rootRoleResult = buildBaseRoleFromRoot(validatedRoot, roleName);
+    // 5. 从验证过的root构建BaseRole（对应Go版本的signedRoot.BuildBaseRole(data.CanonicalRootRole)）
+    auto rootRoleResult = signedRoot->BuildBaseRole(roleName);
     if (!rootRoleResult.ok()) {
         // 这不应该发生，因为root已经被验证过了
+        utils::GetLogger().Error("loadRoot: Failed to build base role from validated root: " + rootRoleResult.error().getMessage());
         return rootRoleResult.error();
     }
 
-    // 6. 设置到repo中
-    repo_->SetRoot(validatedRoot);
+    // 6. 设置到repo中（对应Go版本的rb.repo.Root = signedRoot）
+    repo_->SetRoot(signedRoot);
     
-    // 设置原始root角色用于轮换验证 - 对应Go版本的 rb.repo.originalRootRole = rootRole
+    // 设置原始root角色用于轮换验证（对应Go版本的rb.repo.originalRootRole = rootRole）
     repo_->SetOriginalRootRole(rootRoleResult.value());
 
+    utils::GetLogger().Info("loadRoot: Successfully loaded and validated root for GUN: " + gun_);
     return Error(); // 成功
 }
 

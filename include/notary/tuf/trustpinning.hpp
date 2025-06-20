@@ -5,19 +5,7 @@
 #include <string>
 #include <functional>
 #include <memory>
-
-// 前向声明
-namespace notary {
-namespace tuf {
-namespace data {
-    class Certificate {
-    public:
-        Certificate() = default;
-        // 证书相关方法将在需要时实现
-    };
-}
-}
-}
+#include "notary/utils/x509.hpp"
 
 namespace notary {
 namespace tuf {
@@ -39,8 +27,8 @@ public:
 // 参数：叶子证书，中间证书列表
 // 返回：是否通过验证
 using CertChecker = std::function<bool(
-    const std::shared_ptr<data::Certificate>& leafCert,
-    const std::vector<std::shared_ptr<data::Certificate>>& intCerts
+    const std::shared_ptr<utils::Certificate>& leafCert,
+    const std::vector<std::shared_ptr<utils::Certificate>>& intCerts
 )>;
 
 // Trust Pin检查器类 - 对应Go版本的trustPinChecker
@@ -54,20 +42,20 @@ public:
     
     // TOFU检查 - 对应Go版本的tofusCheck
     bool tofusCheck(
-        const std::shared_ptr<data::Certificate>& leafCert,
-        const std::vector<std::shared_ptr<data::Certificate>>& intCerts
+        const std::shared_ptr<utils::Certificate>& leafCert,
+        const std::vector<std::shared_ptr<utils::Certificate>>& intCerts
     ) const;
     
     // 证书检查 (暂未实现)
     bool certsCheck(
-        const std::shared_ptr<data::Certificate>& leafCert,
-        const std::vector<std::shared_ptr<data::Certificate>>& intCerts
+        const std::shared_ptr<utils::Certificate>& leafCert,
+        const std::vector<std::shared_ptr<utils::Certificate>>& intCerts
     ) const;
     
     // CA检查 (暂未实现)  
     bool caCheck(
-        const std::shared_ptr<data::Certificate>& leafCert,
-        const std::vector<std::shared_ptr<data::Certificate>>& intCerts
+        const std::shared_ptr<utils::Certificate>& leafCert,
+        const std::vector<std::shared_ptr<utils::Certificate>>& intCerts
     ) const;
 };
 

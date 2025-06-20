@@ -13,8 +13,8 @@ TrustPinChecker::TrustPinChecker(const std::string& gun, const TrustPinConfig& c
 // TOFU检查实现 - 对应Go版本的tofusCheck
 // TOFU (Trust On First Use) 总是返回true，表示首次使用时信任
 bool TrustPinChecker::tofusCheck(
-    const std::shared_ptr<data::Certificate>& leafCert,
-    const std::vector<std::shared_ptr<data::Certificate>>& intCerts
+    const std::shared_ptr<utils::Certificate>& leafCert,
+    const std::vector<std::shared_ptr<utils::Certificate>>& intCerts
 ) const {
     // TOFU策略：总是信任首次见到的证书
     return true;
@@ -22,16 +22,16 @@ bool TrustPinChecker::tofusCheck(
 
 // 证书检查 (暂未实现，抛出异常)
 bool TrustPinChecker::certsCheck(
-    const std::shared_ptr<data::Certificate>& leafCert,
-    const std::vector<std::shared_ptr<data::Certificate>>& intCerts
+    const std::shared_ptr<utils::Certificate>& leafCert,
+    const std::vector<std::shared_ptr<utils::Certificate>>& intCerts
 ) const {
     throw std::runtime_error("证书检查功能暂未实现");
 }
 
 // CA检查 (暂未实现，抛出异常)
 bool TrustPinChecker::caCheck(
-    const std::shared_ptr<data::Certificate>& leafCert,
-    const std::vector<std::shared_ptr<data::Certificate>>& intCerts
+    const std::shared_ptr<utils::Certificate>& leafCert,
+    const std::vector<std::shared_ptr<utils::Certificate>>& intCerts
 ) const {
     throw std::runtime_error("CA检查功能暂未实现");
 }
@@ -69,8 +69,8 @@ CertChecker NewTrustPinChecker(
     }
     
     // 默认返回TOFU检查器
-    return [checker](const std::shared_ptr<data::Certificate>& leafCert,
-                     const std::vector<std::shared_ptr<data::Certificate>>& intCerts) -> bool {
+    return [checker](const std::shared_ptr<utils::Certificate>& leafCert,
+                     const std::vector<std::shared_ptr<utils::Certificate>>& intCerts) -> bool {
         return checker->tofusCheck(leafCert, intCerts);
     };
 }

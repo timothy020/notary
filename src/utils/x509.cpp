@@ -138,6 +138,15 @@ bool Certificate::IsValid() const {
     return cert_ != nullptr;
 }
 
+bool Certificate::IsCA() const {
+    if (!cert_) return false;
+    
+    // 使用X509_check_ca函数检查证书是否为CA证书
+    // 这个函数返回值：1表示是CA，0表示不是CA，-1表示错误
+    int result = X509_check_ca(cert_);
+    return (result == 1);
+}
+
 // 从PEM数据加载证书
 std::shared_ptr<utils::Certificate> LoadCertificateFromPEM(const std::vector<uint8_t>& pemData) {
     BIO* bio = BIO_new_mem_buf(pemData.data(), static_cast<int>(pemData.size()));
@@ -162,6 +171,266 @@ std::shared_ptr<utils::Certificate> LoadCertificateFromFile(const std::string& f
                               std::istreambuf_iterator<char>());
     
     return LoadCertificateFromPEM(data);
+}
+
+// LoadCertBundleFromPEM loads certificates from the PEM data provided.
+// The data is expected to be PEM Encoded and contain one or more certificates
+// with PEM type "CERTIFICATE" - 对应Go版本的utils.LoadCertBundleFromPEM函数
+std::vector<std::shared_ptr<Certificate>> LoadCertBundleFromPEM(const std::vector<uint8_t>& pemBytes) {
+    if (pemBytes.empty()) {
+        throw CertificateError("PEM data is empty");
+    }
+    
+    std::vector<std::shared_ptr<Certificate>> certificates;
+    
+    // 创建内存BIO用于读取PEM数据
+    BIO* bio = BIO_new_mem_buf(pemBytes.data(), static_cast<int>(pemBytes.size()));
+    if (!bio) {
+        throw CertificateError("Failed to create memory BIO for PEM data");
+    }
+    
+    char* name = nullptr;
+    char* header = nullptr;
+    unsigned char* data = nullptr;
+    long len = 0;
+    
+    // 循环读取所有PEM块，对应Go版本的 for ; block != nil; block, pemBytes = pem.Decode(pemBytes)
+    while (PEM_read_bio(bio, &name, &header, &data, &len) == 1) {
+        // 检查PEM块类型是否为"CERTIFICATE"（对应Go版本的 if block.Type == "CERTIFICATE"）
+        if (name && strcmp(name, "CERTIFICATE") == 0) {
+            // 解析证书（对应Go版本的 x509.ParseCertificate(block.Bytes)）
+            const unsigned char* p = data;
+            X509* cert = d2i_X509(nullptr, &p, len);
+            
+            if (cert) {
+                // 创建Certificate对象并添加到结果列表中
+                // （对应Go版本的 certificates = append(certificates, cert)）
+                auto certWrapper = std::make_shared<Certificate>(cert);
+                certificates.push_back(certWrapper);
+                utils::GetLogger().Debug("Successfully loaded certificate from PEM bundle");
+            } else {
+                // 清理资源
+                if (name) {
+                    OPENSSL_free(name);
+                    name = nullptr;
+                }
+                if (header) {
+                    OPENSSL_free(header);
+                    header = nullptr;
+                }
+                if (data) {
+                    OPENSSL_free(data);
+                    data = nullptr;
+                }
+                BIO_free(bio);
+                
+                // 对应Go版本的解析错误处理
+                throw CertificateError("Failed to parse certificate from PEM data");
+            }
+        } else {
+            // 遇到非证书类型的PEM块，对应Go版本的 
+            // return nil, fmt.Errorf("invalid pem block type: %s", block.Type)
+            std::string blockType = name ? name : "unknown";
+            
+            // 清理资源
+            if (name) {
+                OPENSSL_free(name);
+                name = nullptr;
+            }
+            if (header) {
+                OPENSSL_free(header);
+                header = nullptr;
+            }
+            if (data) {
+                OPENSSL_free(data);
+                data = nullptr;
+            }
+            BIO_free(bio);
+            
+            throw CertificateError("Invalid PEM block type: " + blockType + ", expected CERTIFICATE");
+        }
+        
+        // 释放当前PEM块的资源
+        if (name) {
+            OPENSSL_free(name);
+            name = nullptr;
+        }
+        if (header) {
+            OPENSSL_free(header);
+            header = nullptr;
+        }
+        if (data) {
+            OPENSSL_free(data);
+            data = nullptr;
+        }
+    }
+    
+    // 释放BIO资源
+    BIO_free(bio);
+    
+    // 检查是否找到了任何证书，对应Go版本的
+    // if len(certificates) == 0 { return nil, fmt.Errorf("no valid certificates found") }
+    if (certificates.empty()) {
+        throw CertificateError("No valid certificates found in PEM data");
+    }
+    
+    utils::GetLogger().Debug("Successfully loaded " + std::to_string(certificates.size()) + 
+                           " certificates from PEM bundle");
+    
+    return certificates;
+}
+
+// LoadCertBundleFromFile loads certificates from the file provided.
+// The data is expected to be PEM Encoded and contain one or more certificates
+// with PEM type "CERTIFICATE" - 对应Go版本的utils.LoadCertBundleFromFile函数
+std::vector<std::shared_ptr<Certificate>> LoadCertBundleFromFile(const std::string& filename) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file.is_open()) {
+        throw CertificateError("Cannot open file: " + filename);
+    }
+    
+    // 读取文件内容到vector
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
+    
+    if (data.empty()) {
+        throw CertificateError("File is empty: " + filename);
+    }
+    
+    return LoadCertBundleFromPEM(data);
+}
+
+// GetLeafCerts parses a list of x509 Certificates and returns all of them
+// that aren't CA - 对应Go版本的utils.GetLeafCerts函数
+std::vector<std::shared_ptr<Certificate>> GetLeafCerts(const std::vector<std::shared_ptr<Certificate>>& certs) {
+    std::vector<std::shared_ptr<Certificate>> leafCerts;
+    
+    for (const auto& cert : certs) {
+        if (!cert) {
+            utils::GetLogger().Warn("Skipping null certificate in GetLeafCerts");
+            continue;
+        }
+        
+        if (cert->IsCA()) {
+            continue;
+        }
+        
+        leafCerts.push_back(cert);
+    }
+    
+    utils::GetLogger().Debug("GetLeafCerts: Found " + std::to_string(leafCerts.size()) + 
+                           " leaf certificates out of " + std::to_string(certs.size()) + " total certificates");
+    
+    return leafCerts;
+}
+
+// GetIntermediateCerts parses a list of x509 Certificates and returns all of the
+// ones marked as a CA, to be used as intermediates - 对应Go版本的utils.GetIntermediateCerts函数
+std::vector<std::shared_ptr<Certificate>> GetIntermediateCerts(const std::vector<std::shared_ptr<Certificate>>& certs) {
+    std::vector<std::shared_ptr<Certificate>> intCerts;
+    
+    for (const auto& cert : certs) {
+        if (!cert) {
+            utils::GetLogger().Warn("Skipping null certificate in GetIntermediateCerts");
+            continue;
+        }
+        
+        if (cert->IsCA()) {
+            intCerts.push_back(cert);
+        }
+    }
+    
+    utils::GetLogger().Debug("GetIntermediateCerts: Found " + std::to_string(intCerts.size()) + 
+                           " intermediate certificates out of " + std::to_string(certs.size()) + " total certificates");
+    
+    return intCerts;
+}
+
+// ValidateCertificate returns an error if the certificate is not valid for notary
+// Currently this is only ensuring the public key has a large enough modulus if RSA,
+// using a non SHA1 signature algorithm, and an optional time expiry check
+// 对应Go版本的utils.ValidateCertificate函数
+Error ValidateCertificate(X509* cert, bool checkExpiry) {
+    if (!cert) {
+        return Error("Certificate is null");
+    }
+    
+    // 对应Go版本的 if (c.NotBefore).After(c.NotAfter)
+    const ASN1_TIME* notBefore = X509_get0_notBefore(cert);
+    const ASN1_TIME* notAfter = X509_get0_notAfter(cert);
+    
+    if (!notBefore || !notAfter) {
+        return Error("Certificate validity times are invalid");
+    }
+    
+    // 比较NotBefore和NotAfter时间
+    int cmp = ASN1_TIME_compare(notBefore, notAfter);
+    if (cmp >= 0) { // NotBefore >= NotAfter
+        return Error("Certificate validity window is invalid");
+    }
+    
+    // 对应Go版本的签名算法检查
+    // Can't have SHA1 sig algorithm
+    int signatureNid = X509_get_signature_nid(cert);
+    if (signatureNid == NID_sha1WithRSAEncryption || 
+        signatureNid == NID_dsaWithSHA1 || 
+        signatureNid == NID_ecdsa_with_SHA1) {
+        
+        return Error("Certificate uses invalid SHA1 signature algorithm");
+    }
+    
+    // 对应Go版本的RSA密钥长度检查
+    // If we have an RSA key, make sure it's long enough
+    EVP_PKEY* pkey = X509_get_pubkey(cert);
+    if (pkey) {
+        int keyType = EVP_PKEY_id(pkey);
+        if (keyType == EVP_PKEY_RSA) {
+            // 使用EVP_PKEY_get_bits来获取密钥位长度（OpenSSL 3.0推荐方法）
+            int keyBits = EVP_PKEY_get_bits(pkey);
+            if (keyBits < MinRSABitSize) {
+                EVP_PKEY_free(pkey);
+                return Error("RSA bit length is too short");
+            }
+        }
+        EVP_PKEY_free(pkey);
+    }
+    
+    // 对应Go版本的过期时间检查
+    if (checkExpiry) {
+        // 使用 OpenSSL 的原生函数进行时间比较，这是最安全、最健壮的方式
+        // X509_cmp_current_time 返回:
+        //  0: 如果当前时间等于证书时间
+        // -1: 如果当前时间在证书时间之前
+        //  1: 如果当前时间在证书时间之后
+        // X509_cmp_time 比较指定时间与证书时间
+
+        // Give one day leeway on creation "before" time
+        // 检查证书是否在24小时后才生效 (对应Go版本的tomorrow.Before(c.NotBefore))
+        time_t tomorrow = time(nullptr) + 24 * 3600;
+        if (X509_cmp_time(notBefore, &tomorrow) > 0) {
+            return Error("Certificate is not yet valid");
+        }
+        
+        // 检查证书是否已经过期 (对应Go版本的now.After(c.NotAfter))
+        if (X509_cmp_current_time(notAfter) < 0) {
+            return Error("Certificate has expired");
+        }
+
+        // 检查证书是否在6个月内到期 (对应Go版本的6个月警告)
+        // 6个月约等于 15552000 秒 (6 * 30 * 24 * 3600)
+        time_t sixMonthsFromNow = time(nullptr) + 15552000;
+        if (X509_cmp_time(notAfter, &sixMonthsFromNow) < 0) {
+            utils::GetLogger().Warn("Certificate is near expiry (expires within 6 months)");
+        }
+    }
+    
+    // 对应Go版本的 return nil (无错误)
+    return Error(); // 空的Error对象表示成功
+}
+
+// Certificate对象版本的重载
+Error ValidateCertificate(const Certificate& cert, bool checkExpiry) {
+    return ValidateCertificate(cert.GetX509(), checkExpiry);
 }
 
 
@@ -548,6 +817,208 @@ std::string CanonicalKeyID(std::shared_ptr<crypto::PublicKey> k) {
         // 对于常规的RSA/ECDSA密钥，直接返回密钥ID
         return k->ID();
     }
+}
+
+// CertChainToPEM is a utility function returns a PEM encoded chain of x509 Certificates
+// 对应Go版本的utils.CertChainToPEM函数
+std::pair<std::vector<uint8_t>, Error> CertChainToPEM(const std::vector<std::shared_ptr<Certificate>>& certChain) {
+    if (certChain.empty()) {
+        utils::GetLogger().Error("Certificate chain is empty");
+        return std::make_pair(std::vector<uint8_t>(), Error("certificate chain is empty"));
+    }
+    
+    utils::GetLogger().Debug("Converting certificate chain of " + std::to_string(certChain.size()) + " certificates to PEM");
+    
+    // 创建内存BIO用于累积PEM数据
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        utils::GetLogger().Error("Failed to create memory BIO for certificate chain");
+        return std::make_pair(std::vector<uint8_t>(), Error("failed to create memory BIO"));
+    }
+    
+    // 使用RAII管理BIO资源
+    struct BIODeleter {
+        void operator()(BIO* b) { if (b) BIO_free(b); }
+    };
+    std::unique_ptr<BIO, BIODeleter> bioGuard(bio);
+    
+    // 遍历证书链，直接使用OpenSSL的PEM_write_bio_X509函数（对应Go版本的for循环）
+    for (const auto& cert : certChain) {
+        if (!cert || !cert->IsValid()) {
+            utils::GetLogger().Error("Invalid certificate found in chain");
+            return std::make_pair(std::vector<uint8_t>(), Error("invalid certificate in chain"));
+        }
+        
+        X509* x509 = cert->GetX509();
+        if (!x509) {
+            utils::GetLogger().Error("Failed to get X509 certificate from Certificate object");
+            return std::make_pair(std::vector<uint8_t>(), Error("failed to get X509 certificate"));
+        }
+        
+        // 直接使用OpenSSL的PEM_write_bio_X509函数写入PEM格式
+        // 这比先转换为ToPEM再写入更高效（对应Go版本的pem.Encode）
+        if (PEM_write_bio_X509(bio, x509) != 1) {
+            utils::GetLogger().Error("Failed to write certificate to PEM format");
+            return std::make_pair(std::vector<uint8_t>(), Error("failed to write certificate to PEM format"));
+        }
+    }
+    
+    // 从BIO中获取累积的PEM数据
+    char* pemData;
+    long pemLen = BIO_get_mem_data(bio, &pemData);
+    if (pemLen <= 0) {
+        utils::GetLogger().Error("No PEM data generated from certificate chain");
+        return std::make_pair(std::vector<uint8_t>(), Error("no PEM data generated"));
+    }
+    
+    // 复制数据到结果向量
+    std::vector<uint8_t> result(pemData, pemData + pemLen);
+    
+    utils::GetLogger().Debug("Successfully converted certificate chain to PEM, total size: " + std::to_string(result.size()) + " bytes");
+    
+    return std::make_pair(result, Error()); // 空Error表示成功
+}
+
+// CertBundleToKey creates a TUF key from a leaf cert and a list of intermediates
+// 对应Go版本的utils.CertBundleToKey函数
+std::pair<std::shared_ptr<crypto::PublicKey>, Error> CertBundleToKey(
+    std::shared_ptr<Certificate> leafCert,
+    const std::vector<std::shared_ptr<Certificate>>& intCerts) {
+    
+    if (!leafCert || !leafCert->IsValid()) {
+        utils::GetLogger().Error("Leaf certificate is null or invalid");
+        return std::make_pair(nullptr, Error("leaf certificate is null or invalid"));
+    }
+    
+    utils::GetLogger().Debug("Creating TUF key from certificate bundle with " + 
+                           std::to_string(intCerts.size()) + " intermediate certificates");
+    
+    // 构建证书链（对应Go版本的certBundle := []*x509.Certificate{leafCert}）
+    std::vector<std::shared_ptr<Certificate>> certBundle;
+    certBundle.push_back(leafCert);
+    
+    // 添加中间证书（对应Go版本的certBundle = append(certBundle, intCerts...)）
+    certBundle.insert(certBundle.end(), intCerts.begin(), intCerts.end());
+    
+    // 使用CertChainToPEM函数将证书链转换为PEM格式（对应Go版本的CertChainToPEM(certBundle)）
+    auto [certChainPEM, err] = CertChainToPEM(certBundle);
+    if (!err.ok()) {
+        utils::GetLogger().Error("Failed to convert certificate bundle to PEM: " + err.getMessage());
+        return std::make_pair(nullptr, err);
+    }
+    
+    // 获取叶子证书的公钥算法类型
+    X509* leafX509 = leafCert->GetX509();
+    if (!leafX509) {
+        utils::GetLogger().Error("Failed to get X509 from leaf certificate");
+        return std::make_pair(nullptr, Error("failed to get X509 from leaf certificate"));
+    }
+    
+    EVP_PKEY* pkey = X509_get_pubkey(leafX509);
+    if (!pkey) {
+        utils::GetLogger().Error("Failed to extract public key from leaf certificate");
+        return std::make_pair(nullptr, Error("failed to extract public key from leaf certificate"));
+    }
+    
+    // 使用RAII管理EVP_PKEY资源
+    struct EVP_PKEY_Deleter {
+        void operator()(EVP_PKEY* p) { if (p) EVP_PKEY_free(p); }
+    };
+    std::unique_ptr<EVP_PKEY, EVP_PKEY_Deleter> pkeyGuard(pkey);
+    
+    int keyType = EVP_PKEY_id(pkey);
+    
+    // 根据叶子证书的公钥算法创建对应的PublicKey对象（对应Go版本的switch语句）
+    std::shared_ptr<crypto::PublicKey> newKey;
+    switch (keyType) {
+        case EVP_PKEY_RSA:
+            utils::GetLogger().Debug("Creating RSA X509 public key from certificate bundle");
+            newKey = crypto::NewRSAx509PublicKey(certChainPEM);
+            break;
+            
+        case EVP_PKEY_EC:
+            utils::GetLogger().Debug("Creating ECDSA X509 public key from certificate bundle");
+            newKey = crypto::NewECDSAx509PublicKey(certChainPEM);
+            break;
+            
+        default:
+            utils::GetLogger().Error("Unknown key type parsed from leaf certificate: " + std::to_string(keyType));
+            return std::make_pair(nullptr, Error("unsupported key algorithm in leaf certificate"));
+    }
+    
+    if (!newKey) {
+        utils::GetLogger().Error("Failed to create public key from certificate bundle");
+        return std::make_pair(nullptr, Error("failed to create public key from certificate bundle"));
+    }
+    
+    utils::GetLogger().Debug("Successfully created TUF key from certificate bundle, key ID: " + newKey->ID());
+    
+    return std::make_pair(newKey, Error()); // 空Error表示成功
+}
+
+// CertsToKeys transforms each of the input certificate chains into its corresponding PublicKey
+// 对应Go版本的utils.CertsToKeys函数
+std::map<std::string, std::shared_ptr<crypto::PublicKey>> CertsToKeys(
+    const std::map<std::string, std::shared_ptr<Certificate>>& leafCerts,
+    const std::map<std::string, std::vector<std::shared_ptr<Certificate>>>& intCerts) {
+    
+    utils::GetLogger().Debug("Converting " + std::to_string(leafCerts.size()) + " certificate chains to public keys");
+    
+    // 创建结果映射（对应Go版本的keys := make(map[string]data.PublicKey)）
+    std::map<std::string, std::shared_ptr<crypto::PublicKey>> keys;
+    
+    // 遍历每个叶子证书（对应Go版本的for id, leafCert := range leafCerts）
+    for (const auto& [id, leafCert] : leafCerts) {
+        if (!leafCert || !leafCert->IsValid()) {
+            utils::GetLogger().Warn("Skipping invalid leaf certificate for ID: " + id);
+            continue;
+        }
+        
+        utils::GetLogger().Debug("Processing certificate chain for ID: " + id);
+        
+        // 获取该ID对应的中间证书列表，使用引用避免拷贝（对应Go版本的intCerts[id]）
+        const std::vector<std::shared_ptr<Certificate>>* intCertsForId = nullptr;
+        auto intCertIt = intCerts.find(id);
+        if (intCertIt != intCerts.end()) {
+            intCertsForId = &(intCertIt->second);
+        }
+        
+        // 使用空vector作为默认值，避免条件分支
+        static const std::vector<std::shared_ptr<Certificate>> emptyIntCerts;
+        const std::vector<std::shared_ptr<Certificate>>& actualIntCerts = 
+            intCertsForId ? *intCertsForId : emptyIntCerts;
+        
+        // 尝试将证书束转换为公钥（对应Go版本的if key, err := CertBundleToKey(leafCert, intCerts[id]); err == nil）
+        auto [key, err] = CertBundleToKey(leafCert, actualIntCerts);
+        if (err.ok() && key) {
+            // 成功创建公钥，添加到结果映射中（对应Go版本的keys[key.ID()] = key）
+            std::string keyID = key->ID();
+            if (!keyID.empty()) {
+                // 使用emplace避免不必要的拷贝
+                keys.emplace(std::move(keyID), std::move(key));
+                utils::GetLogger().Debug("Successfully created public key for certificate ID " + id + 
+                                       ", public key ID: " + keyID);
+            } else {
+                utils::GetLogger().Warn("Generated public key has empty ID for certificate ID: " + id);
+            }
+        } else {
+            // 转换失败，记录警告但继续处理其他证书（对应Go版本中的隐式跳过）
+            const std::string& errorMsg = err.getMessage();
+            if (!errorMsg.empty()) {
+                utils::GetLogger().Warn("Failed to create public key for certificate ID " + id + 
+                                      ": " + errorMsg);
+            } else {
+                utils::GetLogger().Warn("Failed to create public key for certificate ID " + id + 
+                                      ": unknown error");
+            }
+        }
+    }
+    
+    utils::GetLogger().Debug("Successfully converted " + std::to_string(keys.size()) + 
+                           " certificate chains to public keys out of " + 
+                           std::to_string(leafCerts.size()) + " total chains");
+    
+    return keys;
 }
 
 }

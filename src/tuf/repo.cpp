@@ -2021,5 +2021,56 @@ void Signed::fromJson(const json& j) {
     // signedData = std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
 }
 
+// RootFromSigned fully unpacks a Signed object into a SignedRoot and ensures
+// that it is a valid SignedRoot - 对应Go版本的data.RootFromSigned函数
+Result<std::shared_ptr<SignedRoot>> RootFromSigned(std::shared_ptr<Signed> s) {
+    if (!s) {
+        utils::GetLogger().Error("RootFromSigned: Signed object is null");
+        return Result<std::shared_ptr<SignedRoot>>(Error("signed object is null"));
+    }
+    
+    // 检查signed data是否为空（对应Go版本的 if s.Signed == nil）
+    if (s->signedData.empty()) {
+        utils::GetLogger().Error("RootFromSigned: root file contained an empty payload");
+        return Result<std::shared_ptr<SignedRoot>>(Error("root file contained an empty payload"));
+    }
+    
+    utils::GetLogger().Debug("RootFromSigned: Parsing signed root data");
+    
+    try {
+        // 创建Root对象并从JSON反序列化（对应Go版本的defaultSerializer.Unmarshal）
+        Root r;
+        json rootJson = json::parse(s->signedData.begin(), s->signedData.end());
+        r.fromJson(rootJson);
+        
+        utils::GetLogger().Debug("RootFromSigned: Successfully parsed root structure");
+        
+        // 创建SignedRoot对象并复制签名（对应Go版本的copy(sigs, s.Signatures)）
+        auto signedRoot = std::make_shared<SignedRoot>();
+        signedRoot->Signed = std::move(r);
+        
+        // 复制签名列表
+        signedRoot->Signatures.clear();
+        signedRoot->Signatures.reserve(s->Signatures.size());
+        for (const auto& sig : s->Signatures) {
+            signedRoot->Signatures.push_back(sig);
+        }
+        
+        utils::GetLogger().Debug("RootFromSigned: Successfully created SignedRoot with " + 
+                               std::to_string(signedRoot->Signatures.size()) + " signatures");
+        
+        return Result<std::shared_ptr<SignedRoot>>(signedRoot);
+        
+    } catch (const json::exception& e) {
+        std::string errorMsg = "Failed to parse root JSON: " + std::string(e.what());
+        utils::GetLogger().Error("RootFromSigned: " + errorMsg);
+        return Result<std::shared_ptr<SignedRoot>>(Error(errorMsg));
+    } catch (const std::exception& e) {
+        std::string errorMsg = "Failed to create SignedRoot: " + std::string(e.what());
+        utils::GetLogger().Error("RootFromSigned: " + errorMsg);
+        return Result<std::shared_ptr<SignedRoot>>(Error(errorMsg));
+    }
+}
+
 } // namespace tuf
 } // namespace notary 

@@ -402,5 +402,9 @@ Result<FileMeta> NewFileMeta(const std::vector<uint8_t>& data,
 // 辅助函数：检查哈希结构的有效性
 Error CheckValidHashStructures(const std::map<std::string, std::vector<uint8_t>>& hashes);
 
+// RootFromSigned fully unpacks a Signed object into a SignedRoot and ensures
+// that it is a valid SignedRoot - 对应Go版本的data.RootFromSigned函数
+Result<std::shared_ptr<SignedRoot>> RootFromSigned(std::shared_ptr<Signed> s);
+
 } // namespace tuf
 } // namespace notary 

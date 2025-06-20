@@ -41,6 +41,7 @@ add_library(notary_lib
     tuf/repo.cpp
     tuf/builder.cpp
     tuf/trustpinning.cpp
+    tuf/certs.cpp
 )
 
 # 设置包含目录
