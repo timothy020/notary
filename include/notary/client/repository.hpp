@@ -5,7 +5,7 @@
 #include <memory>
 #include <map>
 #include "notary/crypto/crypto_service.hpp"
-#include "notary/storage/metadata_store.hpp"
+#include "notary/storage/remote_store.hpp"
 #include "notary/types.hpp"
 #include "notary/tuf/repo.hpp"
 #include <nlohmann/json.hpp>
@@ -15,7 +15,6 @@
 namespace notary {
 
 using crypto::CryptoService;
-using storage::MetadataStore;
 using storage::RemoteStore;
 using json = nlohmann::json;
 
@@ -33,78 +32,6 @@ struct TargetWithRole {
     RoleName role;                // 角色名称
 };
 
-// // Changelist 相关类型和接口定义
-// namespace changelist {
-
-// // 操作类型
-// const std::string ActionCreate = "create";
-// const std::string ActionUpdate = "update";
-// const std::string ActionDelete = "delete";
-
-// // 内容类型
-// const std::string TypeTargetsTarget = "target";
-// const std::string TypeTargetsDelegation = "delegation";
-
-// // Change类接口
-// class Change {
-// public:
-//     virtual ~Change() = default;
-//     virtual std::string Action() const = 0;
-//     virtual std::string Scope() const = 0;
-//     virtual std::string Type() const = 0;
-//     virtual std::string Path() const = 0;
-//     virtual std::vector<uint8_t> Content() const = 0;
-// };
-
-// // TUF Change实现类
-// class TUFChange : public Change {
-// public:
-//     TUFChange(const std::string& action, const std::string& role, 
-//               const std::string& changeType, const std::string& changePath,
-//               const std::vector<uint8_t>& content)
-//         : action_(action), role_(role), changeType_(changeType), 
-//           changePath_(changePath), content_(content) {}
-
-//     std::string Action() const override { return action_; }
-//     std::string Scope() const override { return role_; }
-//     std::string Type() const override { return changeType_; }
-//     std::string Path() const override { return changePath_; }
-//     std::vector<uint8_t> Content() const override { return content_; }
-
-// private:
-//     std::string action_;
-//     std::string role_;
-//     std::string changeType_;
-//     std::string changePath_;
-//     std::vector<uint8_t> content_;
-// };
-
-// // Changelist接口
-// class Changelist {
-// public:
-//     virtual ~Changelist() = default;
-//     virtual std::vector<std::shared_ptr<Change>> List() const = 0;
-//     virtual Error Add(const std::shared_ptr<Change>& change) = 0;
-//     virtual Error Clear(const std::string& archive = "") = 0;
-//     virtual Error Close() = 0;
-//     virtual std::string Location() const = 0;
-// };
-
-// // FileChangelist实现类
-// class FileChangelist : public Changelist {
-// public:
-//     FileChangelist(const std::string& dir);
-//     std::vector<std::shared_ptr<Change>> List() const override;
-//     Error Add(const std::shared_ptr<Change>& change) override;
-//     Error Clear(const std::string& archive = "") override;
-//     Error Close() override;
-//     std::string Location() const override { return dir_; }
-
-// private:
-//     std::string dir_;
-// };
-
-// } // namespace changelist
 
 class Repository {
 public:

@@ -1,4 +1,4 @@
-#include "notary/storage/metadata_store.hpp"
+#include "notary/storage/remote_store.hpp"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -18,138 +18,6 @@ size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* use
     return size * nmemb;
 }
 
-MetadataStore::MetadataStore(const std::string& trustDir)
-    : trustDir_(trustDir) {
-    // 确保目录存在
-    std::error_code ec;
-    fs::create_directories(trustDir_, ec);
-    if (ec) {
-        // 记录错误但继续执行，因为目录可能已经存在
-    }
-}
-
-Error MetadataStore::Set(const std::string& gun, 
-                        const std::string& role, 
-                        const json& data) {
-    try {
-        // 创建 GUN 目录
-        std::string gunDir = trustDir_ + "/" + gun;
-        std::error_code ec;
-        fs::create_directories(gunDir, ec);
-        if (ec) {
-            return Error("Failed to create directory: " + gunDir + " - " + ec.message());
-        }
-        
-        // 构建文件路径
-        std::string filePath = getMetadataPath(gun, role);
-        
-        // 写入文件
-        std::ofstream file(filePath);
-        if (!file.is_open()) {
-            return Error("Failed to open file for writing: " + filePath);
-        }
-        
-        file << data.dump(2);
-        file.close();
-        
-        return Error();
-    } catch (const std::exception& e) {
-        return Error("Failed to set metadata: " + std::string(e.what()));
-    }
-}
-
-Result<json> MetadataStore::Get(const std::string& gun, 
-                               const std::string& role) {
-    try {
-        std::string filePath = getMetadataPath(gun, role);
-        
-        // 检查文件是否存在
-        std::error_code ec;
-        if (!fs::exists(filePath, ec)) {
-            if (ec) {
-                return Result<json>(Error("Error checking file existence: " + ec.message()));
-            }
-            return Result<json>(Error("Metadata not found: " + filePath));
-        }
-        
-        // 读取文件
-        std::ifstream file(filePath);
-        if (!file.is_open()) {
-            return Result<json>(Error("Failed to open file: " + filePath));
-        }
-        
-        json data;
-        file >> data;
-        return Result<json>(data);
-    } catch (const std::exception& e) {
-        return Result<json>(Error("Failed to get metadata: " + std::string(e.what())));
-    }
-}
-
-Error MetadataStore::Remove(const std::string& gun, 
-                          const std::string& role) {
-    try {
-        std::string filePath = getMetadataPath(gun, role);
-        
-        // 检查文件是否存在
-        std::error_code ec;
-        if (!fs::exists(filePath, ec)) {
-            if (ec) {
-                return Error("Error checking file existence: " + ec.message());
-            }
-            return Error();  // 文件不存在也视为成功
-        }
-        
-        // 删除文件
-        if (!fs::remove(filePath, ec)) {
-            if (ec) {
-                return Error("Failed to remove file: " + ec.message());
-            }
-        }
-        return Error();
-    } catch (const std::exception& e) {
-        return Error("Failed to remove metadata: " + std::string(e.what()));
-    }
-}
-
-std::vector<std::string> MetadataStore::List(const std::string& gun) {
-    std::vector<std::string> result;
-    std::string gunDir = trustDir_ + "/" + gun;
-    
-    try {
-        // 检查目录是否存在
-        std::error_code ec;
-        if (!fs::exists(gunDir, ec)) {
-            if (ec) {
-                // 记录错误但返回空列表
-                return result;
-            }
-            return result;
-        }
-        
-        // 遍历目录
-        for (const auto& entry : fs::directory_iterator(gunDir, ec)) {
-            if (ec) {
-                // 记录错误但继续遍历
-                continue;
-            }
-            if (entry.is_regular_file(ec) && entry.path().extension() == ".json") {
-                // 获取文件名（不包含扩展名）
-                std::string filename = entry.path().stem().string();
-                result.push_back(filename);
-            }
-        }
-    } catch (const std::exception&) {
-        // 忽略错误，返回空列表
-    }
-    
-    return result;
-}
-
-std::string MetadataStore::getMetadataPath(const std::string& gun,
-                                          const std::string& role) const {
-    return trustDir_ + "/" + gun + "/" + role + ".json";
-}
 
 RemoteStore::RemoteStore(const std::string& serverURL, 
                        const std::string& metaExtension,
@@ -175,7 +43,7 @@ Error translateStatusToError(long statusCode, const std::string& resource) {
     }
 }
 
-Result<json> RemoteStore::GetRemote(const std::string& gun, const std::string& role) {
+Result<json> RemoteStore::GetSized(const std::string& gun, const std::string& role, int64_t size) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         return Result<json>(Error("Failed to initialize CURL"));
@@ -208,12 +76,32 @@ Result<json> RemoteStore::GetRemote(const std::string& gun, const std::string& r
     // 获取HTTP状态码
     long httpCode = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+    double contentLength = 0;
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &contentLength);
     curl_easy_cleanup(curl);
     
     // 处理HTTP状态码
     Error httpError = translateStatusToError(httpCode, role);
     if (!httpError.ok()) {
         return Result<json>(httpError);
+    }
+
+    // 处理大小限制 - 对应Go版本的逻辑
+    int64_t actualSize = size;
+    if (size == NO_SIZE_LIMIT) {
+        actualSize = MAX_DOWNLOAD_SIZE;
+    }
+    
+    // 检查Content-Length是否超过限制 - 对应Go版本的ErrMaliciousServer
+    if (contentLength > 0 && static_cast<int64_t>(contentLength) > actualSize) {
+        return Result<json>(Error("Content-Length exceeds size limit - potential malicious server"));
+    }
+    
+    // 限制实际读取的数据量 - 对应Go版本的io.LimitReader
+    size_t maxRead = static_cast<size_t>(actualSize);
+    if (responseBuffer.size() > maxRead) {
+        responseBuffer.resize(maxRead);
     }
     
     // 解析JSON响应
@@ -256,9 +144,9 @@ Result<json> RemoteStore::GetKey(const std::string& gun, const std::string& role
     
     // 获取HTTP状态码
     long httpCode = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);    
     curl_easy_cleanup(curl);
-    
+
     // 处理HTTP状态码
     Error httpError = translateStatusToError(httpCode, role + " key");
     if (!httpError.ok()) {
@@ -298,63 +186,12 @@ static size_t ReadCallback(char* buffer, size_t size, size_t nitems, void* userd
     return to_copy;
 }
 
-Error RemoteStore::SetRemote(const std::string& gun, const std::string& role, const json& data) {
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        return Error("Failed to initialize CURL");
-    }
+Error RemoteStore::Set(const std::string& gun, const std::string& role, const json& data) {
+    // 将单个元数据包装成map，复用SetMulti的逻辑
+    std::map<std::string, json> singleMeta;
+    singleMeta[role] = data;
     
-    // 构建URL - 使用metaExtension_扩展名
-    std::string url = serverURL_ + "/v2/" + gun + "/_trust/tuf/";
-    
-    // 设置CURL选项
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L); // 启用SSL验证
-    curl_easy_setopt(curl, CURLOPT_POST, 1L); // 设置为POST请求
-    
-    // 准备multipart/form-data
-    struct curl_mime* mime = curl_mime_init(curl);
-    struct curl_mimepart* part = curl_mime_addpart(mime);
-    
-    // 设置文件名和表单字段名 - 对应Go版本的CreateFormFile("files", role)
-    curl_mime_name(part, "files");
-    curl_mime_filename(part, role.c_str()); // 文件名直接是角色名，不加扩展名
-    
-    // 设置内容类型
-    curl_mime_type(part, "application/json");
-    
-    // 设置数据
-    std::string dataStr = data.dump();
-    curl_mime_data(part, dataStr.c_str(), dataStr.size());
-    
-    // 设置multipart表单
-    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
-    
-    // 响应缓冲区
-    std::string responseBuffer;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
-    
-    // 执行请求
-    CURLcode res = curl_easy_perform(curl);
-    
-    // 清理mime资源
-    curl_mime_free(mime);
-    
-    // 检查请求是否成功
-    if (res != CURLE_OK) {
-        std::string errorMsg = curl_easy_strerror(res);
-        curl_easy_cleanup(curl);
-        return Error("CURL request failed: " + errorMsg);
-    }
-    
-    // 获取HTTP状态码
-    long httpCode = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-    curl_easy_cleanup(curl);
-    
-    // 处理HTTP状态码
-    return translateStatusToError(httpCode, "POST metadata");
+    return SetMulti(gun, singleMeta);
 }
 
 // 批量发布多个元数据到远程 - 对应Go版本的SetMulti
@@ -421,6 +258,12 @@ Error RemoteStore::SetMulti(const std::string& gun, const std::map<std::string, 
     return translateStatusToError(httpCode, "POST metadata endpoint");
 }
 
+// 删除单个元数据文件 - 对应Go版本的Remove方法
+// 总是失败，因为我们永远不应该能够远程删除单个元数据文件
+Error RemoteStore::Remove(const std::string& name) {
+    return Error("cannot delete individual metadata files");
+}
+
 // 删除GUN的所有远程元数据 (对应Go版本的RemoveAll)
 Result<bool> RemoteStore::RemoveAll() const {
     CURL* curl = curl_easy_init();
@@ -465,6 +308,46 @@ Result<bool> RemoteStore::RemoveAll() const {
     
     // 删除成功
     return Result<bool>(true);
+}
+
+// 返回存储位置的可读名称 - 对应Go版本的Location
+std::string RemoteStore::Location() const {
+    // 从serverURL_中提取主机名，完全等价于Go版本的url.URL.Host
+    // 例如: "https://user:pass@notary.docker.io:443/path" -> "notary.docker.io:443"
+    
+    std::string url = serverURL_;
+    
+    // 移除协议前缀 (http:// 或 https://)
+    size_t protocolPos = url.find("://");
+    if (protocolPos != std::string::npos) {
+        url = url.substr(protocolPos + 3);
+    }
+    
+    // 移除用户认证信息 (user:pass@)
+    size_t atPos = url.find('@');
+    if (atPos != std::string::npos) {
+        url = url.substr(atPos + 1);
+    }
+    
+    // 查找路径分隔符，只保留主机部分
+    size_t pathPos = url.find('/');
+    if (pathPos != std::string::npos) {
+        url = url.substr(0, pathPos);
+    }
+    
+    // 移除查询参数和片段
+    size_t queryPos = url.find('?');
+    if (queryPos != std::string::npos) {
+        url = url.substr(0, queryPos);
+    }
+    
+    size_t fragmentPos = url.find('#');
+    if (fragmentPos != std::string::npos) {
+        url = url.substr(0, fragmentPos);
+    }
+    
+    // 现在url只包含主机名和端口号，完全等价于Go的url.URL.Host
+    return url;
 }
 
 } // namespace storage

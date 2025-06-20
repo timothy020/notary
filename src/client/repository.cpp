@@ -9,7 +9,7 @@
 #include "notary/utils/helpers.hpp"
 #include "notary/changelist/changelist.hpp"
 #include "notary/storage/key_storage.hpp"
-#include "notary/storage/metadata_store.hpp"
+#include "notary/storage/remote_store.hpp"
 #include "notary/passRetriever/passRetriever.hpp"
 #include <set>
 #include <algorithm>
@@ -777,7 +777,7 @@ Error Repository::updateTUF(bool force) {
         std::string gunStr = gun_.empty() ? "default" : gun_;
         
         // 尝试从远程获取最新的元数据
-        auto rootResult = remoteStore_->GetRemote(gunStr, "root");
+        auto rootResult = remoteStore_->GetSized(gunStr, "root");
         if (!rootResult.ok()) {
             utils::GetLogger().Info("Repository not found", utils::LogContext().With("gun", gunStr));
             return Error("Repository not found");
@@ -796,7 +796,7 @@ Error Repository::updateTUF(bool force) {
         // 获取并更新其他角色的元数据
         std::vector<std::string> roles = {"targets", "snapshot", "timestamp"};
         for (const auto& role : roles) {
-            auto result = remoteStore_->GetRemote(gunStr, role);
+            auto result = remoteStore_->GetSized(gunStr, role);
             if (result.ok()) {
                 std::string roleKey = role == "targets" ? TARGETS_ROLE : role == "snapshot" ? SNAPSHOT_ROLE : TIMESTAMP_ROLE;
                 std::string roleJsonStr = result.value().dump();

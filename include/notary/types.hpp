@@ -134,4 +134,9 @@ private:
 // 全局唯一名称
 using GUN = std::string;
 
+// TUF相关常量
+const int64_t MAX_TIMESTAMP_SIZE = 1024 * 1024; // 1MB
+const int64_t NO_SIZE_LIMIT = -1;
+const int64_t MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024; // 100MB，对应Go版本的notary.MaxDownloadSize
+
 } // namespace notary 

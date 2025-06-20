@@ -9,33 +9,6 @@ namespace storage {
 
 using json = nlohmann::json;
 
-class MetadataStore {
-public:
-    explicit MetadataStore(const std::string& trustDir);
-    
-    // 保存元数据
-    Error Set(const std::string& gun, 
-             const std::string& role, 
-             const json& data);
-    
-    // 获取元数据
-    Result<json> Get(const std::string& gun, 
-                    const std::string& role);
-    
-    // 删除元数据
-    Error Remove(const std::string& gun, 
-                const std::string& role);
-    
-    // 列出所有元数据
-    std::vector<std::string> List(const std::string& gun);
-    
-private:
-    std::string getMetadataPath(const std::string& gun,
-                               const std::string& role) const;
-    
-private:
-    std::string trustDir_;
-};
 
 class RemoteStore {
 public:
@@ -44,15 +17,16 @@ public:
                const std::string& keyExtension = "key");
     
     // 从远程获取元数据
-    Result<json> GetRemote(const std::string& gun,
-                         const std::string& role);
+    Result<json> GetSized(const std::string& gun,
+                         const std::string& role,
+                         int64_t size = -1);
     
     // 从远程获取密钥
     Result<json> GetKey(const std::string& gun,
                       const std::string& role);
     
     // 发布元数据到远程
-    Error SetRemote(const std::string& gun,
+    Error Set(const std::string& gun,
                    const std::string& role,
                    const json& data);
     
@@ -60,8 +34,14 @@ public:
     Error SetMulti(const std::string& gun,
                   const std::map<std::string, json>& metas);
 
+    // 删除单个元数据文件 - 始终返回错误，因为不允许远程删除单个文件
+    Error Remove(const std::string& name);
+    
     // 删除GUN的所有远程元数据 - 对应Go版本的RemoveAll
     Result<bool> RemoveAll() const;
+    
+    // 返回存储位置的可读名称 - 对应Go版本的Location
+    std::string Location() const;
 
 private:
     std::string serverURL_;

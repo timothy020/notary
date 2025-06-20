@@ -22,7 +22,8 @@ add_library(notary_lib
     crypto/certificate.cpp
     main.cpp
     client/repository.cpp
-    storage/metadata_store.cpp
+    client/tufclient.cpp
+    storage/remote_store.cpp
     storage/key_storage.cpp
     storage/storage.cpp
     server/server.cpp
