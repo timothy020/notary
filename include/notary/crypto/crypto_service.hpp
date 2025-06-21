@@ -11,6 +11,12 @@
 namespace notary {
 namespace crypto {
 
+// 前向声明
+class CryptoService;
+
+// EmptyService是一个空的crypto service实例，对应Go版本的EmptyService
+extern std::shared_ptr<CryptoService> EmptyService;
+
 class CryptoService {
 public:
     // 构造函数支持多个keyStore

@@ -16,6 +16,9 @@
 namespace notary {
 namespace crypto {
 
+// EmptyService的定义，对应Go版本的EmptyService = NewCryptoService()
+std::shared_ptr<CryptoService> EmptyService = std::make_shared<CryptoService>();
+
 namespace {
 // 生成随机字节
 std::vector<uint8_t> generateRandomBytes(size_t length) {

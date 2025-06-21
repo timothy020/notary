@@ -27,6 +27,7 @@ add_library(notary_lib
     storage/keystore.cpp
     storage/filestore.cpp
     storage/memorystore.cpp
+    storage/offlinestore.cpp
     server/server.cpp
     server/handlers/default.cpp
     server/handlers/validation.cpp
