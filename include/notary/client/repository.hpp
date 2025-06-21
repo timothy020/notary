@@ -5,7 +5,7 @@
 #include <memory>
 #include <map>
 #include "notary/crypto/crypto_service.hpp"
-#include "notary/storage/remote_storage.hpp"
+#include "notary/storage/httpstore.hpp"
 #include "notary/types.hpp"
 #include "notary/tuf/repo.hpp"
 #include <nlohmann/json.hpp>

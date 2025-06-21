@@ -8,8 +8,8 @@
 #include "notary/utils/x509.hpp"
 #include "notary/utils/helpers.hpp"
 #include "notary/changelist/changelist.hpp"
-#include "notary/storage/key_storage.hpp"
-#include "notary/storage/remote_storage.hpp"
+#include "notary/storage/keystore.hpp"
+#include "notary/storage/httpstore.hpp"
 #include "notary/passRetriever/passRetriever.hpp"
 #include <set>
 #include <algorithm>
@@ -101,7 +101,7 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     , trustDir_(trustDir)
     , serverURL_(serverURL)
     , changelist_(std::make_shared<changelist::FileChangelist>(trustDir+"/tuf/"+gun_+"/changelist"))
-    , cache_(std::make_shared<storage::FileSystemStorage>(trustDir+"/tuf/"+gun_+"/metadata", ".json"))
+    , cache_(std::make_shared<storage::FileStore>(trustDir+"/tuf/"+gun_+"/metadata", ".json"))
     , remoteStore_(std::make_shared<storage::RemoteStore>(serverURL))
     {
     // 初始化cryptoService_

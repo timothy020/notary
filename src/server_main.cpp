@@ -6,7 +6,7 @@
 #include "notary/crypto/crypto_service.hpp"
 #include "notary/utils/logger.hpp"
 #include "server/storage/file_storage.hpp"
-#include "notary/storage/key_storage.hpp"
+#include "notary/storage/keystore.hpp"
 #include "notary/types.hpp"
 
 int main(int argc, char* argv[]) {

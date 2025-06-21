@@ -8,7 +8,7 @@
 #include <functional>
 #include <notary/types.hpp>
 #include <notary/crypto/keys.hpp>
-#include "notary/storage/meta_storage.hpp"
+#include "notary/storage/filestore.hpp"
 
 namespace notary {
 namespace storage {
@@ -54,7 +54,7 @@ public:
     );
     
     // 创建通用密钥存储
-    GenericKeyStore(std::unique_ptr<Storage> storage, PassRetriever passRetriever);
+    GenericKeyStore(std::unique_ptr<MetadataStore> storage, PassRetriever passRetriever);
     
     ~GenericKeyStore() = default;
 
@@ -77,7 +77,7 @@ public:
     std::string Name() const;
 
 private:
-    std::unique_ptr<Storage> store_;
+    std::unique_ptr<MetadataStore> store_;
     PassRetriever passRetriever_;
     std::mutex mutex_;
     

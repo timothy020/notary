@@ -1,4 +1,4 @@
-#include "notary/storage/meta_storage.hpp"
+#include "notary/storage/filestore.hpp"
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(path) _mkdir(path)
@@ -49,15 +49,15 @@ bool createDirRecursive(const std::string& path) {
     return createDir(path);
 }
 
-// FileSystemStorage 实现
-FileSystemStorage::FileSystemStorage(const std::string& baseDir, const std::string& ext) : baseDir_(baseDir), ext_(ext) {
+// FileStore 实现
+FileStore::FileStore(const std::string& baseDir, const std::string& ext) : baseDir_(baseDir), ext_(ext) {
     // 确保基础目录存在
     if (!dirExists(baseDir_)) {
         createDirRecursive(baseDir_);
     }
 }
 
-Result<std::vector<uint8_t>> FileSystemStorage::Get(const std::string& name) {
+Result<std::vector<uint8_t>> FileStore::Get(const std::string& name) {
     std::string filePath = baseDir_ + "/" + name + ext_;
     
     std::ifstream file(filePath, std::ios::binary);
@@ -81,7 +81,7 @@ Result<std::vector<uint8_t>> FileSystemStorage::Get(const std::string& name) {
     return Result<std::vector<uint8_t>>(std::move(data));
 }
 
-Error FileSystemStorage::Set(const std::string& name, const std::vector<uint8_t>& data) {
+Error FileStore::Set(const std::string& name, const std::vector<uint8_t>& data) {
     std::string filePath = baseDir_ + "/" + name + ext_;
     
     // 确保父目录存在
@@ -107,7 +107,7 @@ Error FileSystemStorage::Set(const std::string& name, const std::vector<uint8_t>
     return Error(); // 成功
 }
 
-Error FileSystemStorage::Remove(const std::string& name) {
+Error FileStore::Remove(const std::string& name) {
     std::string filePath = baseDir_ + "/" + name + ext_;
     
     try {
@@ -120,7 +120,7 @@ Error FileSystemStorage::Remove(const std::string& name) {
     }
 }
 
-std::vector<std::string> FileSystemStorage::ListFiles() {
+std::vector<std::string> FileStore::ListFiles() {
     std::vector<std::string> files;
     
     try {
@@ -182,41 +182,9 @@ std::vector<std::string> FileSystemStorage::ListFiles() {
     return files;
 }
 
-std::string FileSystemStorage::Location() const {
+std::string FileStore::Location() const {
     return baseDir_;
 }
-
-// MemoryStorage 实现
-Result<std::vector<uint8_t>> MemoryStorage::Get(const std::string& name) {
-    auto it = storage_.find(name);
-    if (it == storage_.end()) {
-        return Result<std::vector<uint8_t>>(Error("Key not found: " + name));
-    }
-    return Result<std::vector<uint8_t>>(it->second);
-}
-
-Error MemoryStorage::Set(const std::string& name, const std::vector<uint8_t>& data) {
-    storage_[name] = data;
-    return Error(); // 成功
-}
-
-Error MemoryStorage::Remove(const std::string& name) {
-    storage_.erase(name);
-    return Error(); // 成功
-}
-
-std::vector<std::string> MemoryStorage::ListFiles() {
-    std::vector<std::string> files;
-    for (const auto& pair : storage_) {
-        files.push_back(pair.first);
-    }
-    return files;
-}
-
-std::string MemoryStorage::Location() const {
-    return "memory";
-}
-
 
 
 } // namespace storage

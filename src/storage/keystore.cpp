@@ -9,8 +9,9 @@
 #include <algorithm>
 #include "notary/utils/tools.hpp"
 #include "notary/utils/logger.hpp"
-#include "notary/storage/key_storage.hpp"
-#include "notary/storage/meta_storage.hpp"
+#include "notary/storage/keystore.hpp"
+#include "notary/storage/filestore.hpp"
+#include "notary/storage/memorystore.hpp"
 #include "notary/crypto/keys.hpp"
 #include "notary/utils/tools.hpp"
 
@@ -22,18 +23,18 @@ std::unique_ptr<GenericKeyStore> GenericKeyStore::NewKeyFileStore(
     const std::string& baseDir, 
     PassRetriever passRetriever) {
     
-    auto storage = std::make_unique<FileSystemStorage>(baseDir, ".key");
+    auto storage = std::make_unique<FileStore>(baseDir, ".key");
     return std::make_unique<GenericKeyStore>(std::move(storage), passRetriever);
 }
 
 std::unique_ptr<GenericKeyStore> GenericKeyStore::NewKeyMemoryStore(
     PassRetriever passRetriever) {
     
-    auto storage = std::make_unique<MemoryStorage>();
+    auto storage = std::make_unique<MemoryStore>();
     return std::make_unique<GenericKeyStore>(std::move(storage), passRetriever);
 }
 
-GenericKeyStore::GenericKeyStore(std::unique_ptr<Storage> storage, PassRetriever passRetriever)
+GenericKeyStore::GenericKeyStore(std::unique_ptr<MetadataStore> storage, PassRetriever passRetriever)
     : store_(std::move(storage)), passRetriever_(passRetriever) {
     loadKeyInfo();
 }

@@ -11,7 +11,7 @@
 #include <fstream>
 #include <sys/stat.h>
 #include <iostream>
-#include "notary/storage/key_storage.hpp"
+#include "notary/storage/keystore.hpp"
 
 namespace notary {
 namespace crypto {

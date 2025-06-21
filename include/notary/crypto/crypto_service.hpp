@@ -2,7 +2,7 @@
 
 #include "notary/crypto/keys.hpp"
 #include "notary/types.hpp"
-#include "notary/storage/key_storage.hpp"
+#include "notary/storage/keystore.hpp"
 #include <string>
 #include <memory>
 #include <vector>
