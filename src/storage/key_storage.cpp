@@ -10,7 +10,7 @@
 #include "notary/utils/tools.hpp"
 #include "notary/utils/logger.hpp"
 #include "notary/storage/key_storage.hpp"
-#include "notary/storage/storage.hpp"
+#include "notary/storage/meta_storage.hpp"
 #include "notary/crypto/keys.hpp"
 #include "notary/utils/tools.hpp"
 

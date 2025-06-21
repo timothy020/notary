@@ -1,4 +1,4 @@
-#include "notary/storage/storage.hpp"
+#include "notary/storage/meta_storage.hpp"
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(path) _mkdir(path)

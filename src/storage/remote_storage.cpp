@@ -1,4 +1,4 @@
-#include "notary/storage/remote_store.hpp"
+#include "notary/storage/remote_storage.hpp"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>

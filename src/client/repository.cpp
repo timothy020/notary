@@ -9,7 +9,7 @@
 #include "notary/utils/helpers.hpp"
 #include "notary/changelist/changelist.hpp"
 #include "notary/storage/key_storage.hpp"
-#include "notary/storage/remote_store.hpp"
+#include "notary/storage/remote_storage.hpp"
 #include "notary/passRetriever/passRetriever.hpp"
 #include <set>
 #include <algorithm>

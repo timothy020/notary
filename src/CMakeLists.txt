@@ -23,9 +23,9 @@ add_library(notary_lib
     main.cpp
     client/repository.cpp
     client/tufclient.cpp
-    storage/remote_store.cpp
+    storage/remote_storage.cpp
     storage/key_storage.cpp
-    storage/storage.cpp
+    storage/meta_storage.cpp
     server/server.cpp
     server/handlers/default.cpp
     server/handlers/validation.cpp

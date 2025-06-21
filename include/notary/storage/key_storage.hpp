@@ -8,7 +8,7 @@
 #include <functional>
 #include <notary/types.hpp>
 #include <notary/crypto/keys.hpp>
-#include "notary/storage/storage.hpp"
+#include "notary/storage/meta_storage.hpp"
 
 namespace notary {
 namespace storage {
