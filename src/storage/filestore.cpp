@@ -81,6 +81,56 @@ Result<std::vector<uint8_t>> FileStore::Get(const std::string& name) {
     return Result<std::vector<uint8_t>>(std::move(data));
 }
 
+// GetSized 返回给定名称的元数据，最多读取size字节
+// 如果size为NO_SIZE_LIMIT，对应"无限制"，但我们在MAX_DOWNLOAD_SIZE处截断
+// 如果文件大小超过size，返回错误（恶意服务器攻击保护）
+Result<std::vector<uint8_t>> FileStore::GetSized(const std::string& name, int64_t size) {
+    std::string filePath = baseDir_ + "/" + name + ext_;
+    
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file) {
+        return Result<std::vector<uint8_t>>(Error("File not found: " + name));
+    }
+    
+    // 如果size为NO_SIZE_LIMIT，使用MAX_DOWNLOAD_SIZE限制
+    if (size == NO_SIZE_LIMIT) {
+        size = MAX_DOWNLOAD_SIZE;
+    }
+    
+    // 获取文件大小
+    file.seekg(0, std::ios::end);
+    int64_t fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+    
+    // 检查文件大小是否超过限制
+    if (fileSize > size) {
+        return Result<std::vector<uint8_t>>(Error("File too large, potential malicious server attack"));
+    }
+    
+    // 读取文件内容，限制为size字节
+    int64_t readSize = std::min(fileSize, size);
+    std::vector<uint8_t> data(readSize);
+    file.read(reinterpret_cast<char*>(data.data()), readSize);
+    
+    if (!file) {
+        return Result<std::vector<uint8_t>>(Error("Failed to read file: " + filePath));
+    }
+    
+    return Result<std::vector<uint8_t>>(std::move(data));
+}
+
+// SetMulti 在一次操作中设置多个角色的元数据
+Error FileStore::SetMulti(const std::map<std::string, std::vector<uint8_t>>& data) {
+    // 遍历map，对每个键值对调用Set方法
+    for (const auto& pair : data) {
+        Error err = Set(pair.first, pair.second);
+        if (err.hasError()) {
+            return err; // 如果任何Set操作失败，立即返回错误
+        }
+    }
+    return Error(); // 成功
+}
+
 Error FileStore::Set(const std::string& name, const std::vector<uint8_t>& data) {
     std::string filePath = baseDir_ + "/" + name + ext_;
     
@@ -117,6 +167,18 @@ Error FileStore::Remove(const std::string& name) {
         return Error(); // 成功
     } catch (const std::exception& e) {
         return Error("Failed to remove file: " + filePath + ", error: " + e.what());
+    }
+}
+
+// RemoveAll 通过删除基础目录来清空现有的文件存储
+Error FileStore::RemoveAll() {
+    try {
+        if (std::filesystem::exists(baseDir_)) {
+            std::filesystem::remove_all(baseDir_);
+        }
+        return Error(); // 成功
+    } catch (const std::exception& e) {
+        return Error("Failed to remove all files in directory: " + baseDir_ + ", error: " + e.what());
     }
 }
 

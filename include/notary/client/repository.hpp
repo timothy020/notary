@@ -6,6 +6,7 @@
 #include <map>
 #include "notary/crypto/crypto_service.hpp"
 #include "notary/storage/httpstore.hpp"
+#include "notary/storage/filestore.hpp"
 #include "notary/types.hpp"
 #include "notary/tuf/repo.hpp"
 #include <nlohmann/json.hpp>
@@ -128,7 +129,7 @@ private:
     GUN gun_;
     std::string trustDir_;
     std::string serverURL_;
-    std::shared_ptr<storage::FileSystemStorage> cache_;
+    std::shared_ptr<storage::FileStore> cache_;
     std::shared_ptr<storage::RemoteStore> remoteStore_;
     std::shared_ptr<changelist::Changelist> changelist_;
     std::shared_ptr<crypto::CryptoService> cryptoService_;

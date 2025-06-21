@@ -102,7 +102,7 @@ Repository::Repository(const GUN& gun, const std::string& trustDir, const std::s
     , serverURL_(serverURL)
     , changelist_(std::make_shared<changelist::FileChangelist>(trustDir+"/tuf/"+gun_+"/changelist"))
     , cache_(std::make_shared<storage::FileStore>(trustDir+"/tuf/"+gun_+"/metadata", ".json"))
-    , remoteStore_(std::make_shared<storage::RemoteStore>(serverURL))
+    , remoteStore_(storage::HttpStore::NewNotaryServerStore(serverURL, gun))
     {
     // 初始化cryptoService_
     // 定义一个简单的 PassRetriever，表示无密码
@@ -312,16 +312,23 @@ Repository::initializeRoles(const std::vector<std::shared_ptr<crypto::PublicKey>
 
     // 获取远程角色密钥
     for (const auto& role : remoteRoles) {
-        auto keyResult = remoteStore_->GetKey(gun_.empty() ? "default" : gun_, 
-                                          role == RoleName::TimestampRole ? "timestamp" : "snapshot");
+        auto keyResult = remoteStore_->GetKey(role == RoleName::TimestampRole ? "timestamp" : "snapshot");
         if (!keyResult.ok()) {
             std::cerr << "Failed to get remote key : " << keyResult.error().what() << std::endl;
             continue; // 跳过失败的密钥获取
         }
         
-        // 从json中提取公钥信息
-        auto keyJson = keyResult.value();
-        std::cout << "远端获取到的keyJson: " << keyJson << std::endl;
+        // 从字节数据解析JSON
+        std::string keyJsonStr(keyResult.value().begin(), keyResult.value().end());
+        json keyJson;
+        try {
+            keyJson = json::parse(keyJsonStr);
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to parse key JSON: " << e.what() << std::endl;
+            continue;
+        }
+        
+        std::cout << "远端获取到的keyJson: " << keyJson.dump() << std::endl;
 
         // 解码Base64公钥数据
         std::vector<uint8_t> derData = utils::Base64Decode(keyJson["keyval"]["public"]);
@@ -640,21 +647,28 @@ Error Repository::Publish() {
         // 推送更新到远程服务器 (对应Go的remote.SetMulti)
         if (remoteStore_) {
             // 准备批量上传的元数据map - 对应Go版本的SetMulti
-            std::map<std::string, json> metasToUpload;
+            // 需要验证和格式化数据，确保发送到服务器的是有效的JSON
+            std::map<std::string, std::vector<uint8_t>> metasToUpload;
             
             for (const auto& [roleName, data] : updatedFiles) {
-                // 将vector<uint8_t>转换为json对象
+                // 验证vector<uint8_t>是否包含有效的JSON数据
                 try {
                     std::string jsonStr(data.begin(), data.end());
                     json jsonData = json::parse(jsonStr);
-                    metasToUpload[roleName] = jsonData;
+                    
+                    // 重新序列化以确保格式正确性（去除多余空格等）
+                    std::string formattedJsonStr = jsonData.dump();
+                    std::vector<uint8_t> formattedData(formattedJsonStr.begin(), formattedJsonStr.end());
+                    
+                    metasToUpload[roleName] = formattedData;
+                    
                 } catch (const json::exception& e) {
                     return Error("Failed to parse metadata JSON for " + roleName + ": " + e.what());
                 }
             }
             
             // 使用SetMulti一次性上传所有元数据，保持服务器一致性
-            err = remoteStore_->SetMulti(gun_.empty() ? "default" : gun_, metasToUpload);
+            err = remoteStore_->SetMulti(metasToUpload);
             if (!err.ok()) {
                 return Error("Failed to publish metadata using SetMulti: " + err.what());
             }
@@ -777,15 +791,14 @@ Error Repository::updateTUF(bool force) {
         std::string gunStr = gun_.empty() ? "default" : gun_;
         
         // 尝试从远程获取最新的元数据
-        auto rootResult = remoteStore_->GetSized(gunStr, "root");
+        auto rootResult = remoteStore_->GetSized("root", NO_SIZE_LIMIT);
         if (!rootResult.ok()) {
             utils::GetLogger().Info("Repository not found", utils::LogContext().With("gun", gunStr));
             return Error("Repository not found");
         }
         
-        // 将 JSON 对象转换为字节数组
-        std::string rootJsonStr = rootResult.value().dump();
-        std::vector<uint8_t> rootData(rootJsonStr.begin(), rootJsonStr.end());
+        // GetSized已经返回字节数组，直接使用
+        std::vector<uint8_t> rootData = rootResult.value();
 
         // 更新本地缓存
         auto err = cache_->Set(ROOT_ROLE, rootData);
@@ -796,11 +809,11 @@ Error Repository::updateTUF(bool force) {
         // 获取并更新其他角色的元数据
         std::vector<std::string> roles = {"targets", "snapshot", "timestamp"};
         for (const auto& role : roles) {
-            auto result = remoteStore_->GetSized(gunStr, role);
+            auto result = remoteStore_->GetSized(role, NO_SIZE_LIMIT);
             if (result.ok()) {
                 std::string roleKey = role == "targets" ? TARGETS_ROLE : role == "snapshot" ? SNAPSHOT_ROLE : TIMESTAMP_ROLE;
-                std::string roleJsonStr = result.value().dump();
-                std::vector<uint8_t> roleData(roleJsonStr.begin(), roleJsonStr.end());
+                // GetSized已经返回字节数组，直接使用
+                std::vector<uint8_t> roleData = result.value();
                 err = cache_->Set(roleKey, roleData);
                 if (!err.ok()) {
                     return err;
@@ -977,7 +990,7 @@ Error Repository::DeleteTrustData(const std::string& baseDir, const GUN& gun,
             // 创建远程存储客户端 (对应Go的getRemoteStore)
             // 构建URL: baseURL + "/v2/" + gun.String() + "/_trust/tuf/"
             std::string remoteURL = serverURL + "/v2/" + gun + "/_trust/tuf/";
-            auto remoteStore = std::make_shared<storage::RemoteStore>(remoteURL);
+            auto remoteStore = storage::HttpStore::NewNotaryServerStore(serverURL, gun);
             
             // 删除远程数据 (对应Go的remote.RemoveAll())
             auto result = remoteStore->RemoveAll();
@@ -986,8 +999,8 @@ Error Repository::DeleteTrustData(const std::string& baseDir, const GUN& gun,
                     utils::LogContext()
                         .With("gun", gun)
                         .With("serverURL", serverURL)
-                        .With("error", result.error().what()));
-                return result.error();
+                        .With("error", result.what()));
+                return result;
             }
             
             utils::GetLogger().Info("Remote trust data deleted successfully", 

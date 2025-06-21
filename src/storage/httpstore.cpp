@@ -6,6 +6,7 @@
 #include <curl/curl.h>
 #include <sstream>
 #include <iostream>
+#include "notary/utils/logger.hpp"
 
 namespace notary {
 namespace storage {
@@ -16,17 +17,6 @@ namespace fs = std::filesystem;
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
     userp->append((char*)contents, size * nmemb);
     return size * nmemb;
-}
-
-
-RemoteStore::RemoteStore(const std::string& serverURL, 
-                       const std::string& metaExtension,
-                       const std::string& keyExtension)
-    : serverURL_(serverURL)
-    , metaExtension_(metaExtension)
-    , keyExtension_(keyExtension) {
-    // 全局初始化libcurl (应当在程序入口处只初始化一次)
-    curl_global_init(CURL_GLOBAL_DEFAULT);
 }
 
 // 处理HTTP状态码，将其转换为适当的错误
@@ -43,15 +33,100 @@ Error translateStatusToError(long statusCode, const std::string& resource) {
     }
 }
 
-Result<json> RemoteStore::GetSized(const std::string& gun, const std::string& role, int64_t size) {
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        return Result<json>(Error("Failed to initialize CURL"));
+// 构造函数 - 对应Go版本的NewHTTPStore
+HttpStore::HttpStore(const std::string& baseURL, 
+                       const std::string& metaPrefix,
+                       const std::string& metaExtension,
+                       const std::string& keyExtension)
+    : baseURL_(baseURL)
+    , metaPrefix_(metaPrefix)
+    , metaExtension_(metaExtension)
+    , keyExtension_(keyExtension) {
+    // 全局初始化libcurl (应当在程序入口处只初始化一次)
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+}
+
+// 辅助工厂方法 - 对应Go版本的NewNotaryServerStore
+std::unique_ptr<HttpStore> HttpStore::NewNotaryServerStore(const std::string& serverURL, const std::string& gun) {
+    // 构建完整的baseURL，包含gun路径 - 对应Go版本的serverURL+"/v2/"+gun.String()+"/_trust/tuf/"
+    std::string fullBaseURL = serverURL + "/v2/" + gun + "/_trust/tuf/";
+    
+    return std::make_unique<HttpStore>(
+        fullBaseURL,
+        "",      // metaPrefix为空字符串
+        "json",  // metaExtension
+        "key"    // keyExtension
+    );
+}
+
+// URL构建辅助方法 - 对应Go版本的buildMetaURL
+std::string HttpStore::buildMetaURL(const std::string& name) const {
+    std::string filename;
+    if (!name.empty()) {
+        filename = name + "." + metaExtension_;
     }
     
-    // 构建URL - 使用metaExtension_扩展名
+    // 对应Go版本的path.Join(s.metaPrefix, filename)
+    std::string uri;
+    if (!metaPrefix_.empty()) {
+        uri = metaPrefix_;
+        if (!filename.empty()) {
+            if (uri.back() != '/') uri += "/";
+            uri += filename;
+        }
+    } else {
+        uri = filename;
+    }
+    
+    return buildURL(uri);
+}
+
+// URL构建辅助方法 - 对应Go版本的buildKeyURL
+std::string HttpStore::buildKeyURL(const std::string& name) const {
+    std::string filename = name + "." + keyExtension_;
+    
+    // 对应Go版本的path.Join(s.metaPrefix, filename)
+    std::string uri;
+    if (!metaPrefix_.empty()) {
+        uri = metaPrefix_;
+        if (uri.back() != '/') uri += "/";
+        uri += filename;
+    } else {
+        uri = filename;
+    }
+    
+    return buildURL(uri);
+}
+
+// URL构建辅助方法 - 对应Go版本的buildURL
+std::string HttpStore::buildURL(const std::string& uri) const {
+    // 简单的URL连接，对应Go版本的baseURL.ResolveReference(sub)
+    std::string result = baseURL_;
+    if (!uri.empty()) {
+        if (!result.empty() && result.back() != '/') {
+            result += "/";
+        }
+        result += uri;
+    }
+    utils::GetLogger().Info("URL: " + result);
+    return result;
+}
+
+// 实现Get方法 - 调用GetSized的默认版本
+Result<std::vector<uint8_t>> HttpStore::Get(const std::string& name) {
+    return GetSized(name, NO_SIZE_LIMIT);
+}
+
+// GetSized - 对应Go版本的GetSized方法
+Result<std::vector<uint8_t>> HttpStore::GetSized(const std::string& name, int64_t size) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return Result<std::vector<uint8_t>>(Error("Failed to initialize CURL"));
+    }
+    
+    // 构建URL - 使用buildMetaURL
     // 例："http://localhost:4443/v2/docker.io/library/myapp/_trust/tuf/root.json"
-    std::string url = serverURL_ + "/v2/" + gun + "/_trust/tuf/" + role + "." + metaExtension_;
+    std::string url = buildMetaURL(name);
     
     // 设置CURL选项
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -70,7 +145,7 @@ Result<json> RemoteStore::GetSized(const std::string& gun, const std::string& ro
     if (res != CURLE_OK) {
         std::string errorMsg = curl_easy_strerror(res);
         curl_easy_cleanup(curl);
-        return Result<json>(Error("CURL request failed: " + errorMsg));
+        return Result<std::vector<uint8_t>>(Error("CURL request failed: " + errorMsg));
     }
     
     // 获取HTTP状态码
@@ -82,9 +157,9 @@ Result<json> RemoteStore::GetSized(const std::string& gun, const std::string& ro
     curl_easy_cleanup(curl);
     
     // 处理HTTP状态码
-    Error httpError = translateStatusToError(httpCode, role);
+    Error httpError = translateStatusToError(httpCode, name);
     if (!httpError.ok()) {
-        return Result<json>(httpError);
+        return Result<std::vector<uint8_t>>(httpError);
     }
 
     // 处理大小限制 - 对应Go版本的逻辑
@@ -95,7 +170,7 @@ Result<json> RemoteStore::GetSized(const std::string& gun, const std::string& ro
     
     // 检查Content-Length是否超过限制 - 对应Go版本的ErrMaliciousServer
     if (contentLength > 0 && static_cast<int64_t>(contentLength) > actualSize) {
-        return Result<json>(Error("Content-Length exceeds size limit - potential malicious server"));
+        return Result<std::vector<uint8_t>>(Error("Content-Length exceeds size limit - potential malicious server"));
     }
     
     // 限制实际读取的数据量 - 对应Go版本的io.LimitReader
@@ -104,23 +179,31 @@ Result<json> RemoteStore::GetSized(const std::string& gun, const std::string& ro
         responseBuffer.resize(maxRead);
     }
     
-    // 解析JSON响应
+    // 验证响应是否为有效JSON格式，并转换为uint8_t vector
     try {
+        // 解析JSON以验证格式正确性
         json responseJson = json::parse(responseBuffer);
-        return Result<json>(responseJson);
+        
+        // 重新序列化以确保格式一致性
+        std::string formattedJsonStr = responseJson.dump();
+        std::vector<uint8_t> result(formattedJsonStr.begin(), formattedJsonStr.end());
+        return Result<std::vector<uint8_t>>(std::move(result));
+        
     } catch (const json::exception& e) {
-        return Result<json>(Error("Failed to parse JSON response: " + std::string(e.what())));
+        return Result<std::vector<uint8_t>>(Error("Failed to parse JSON metadata response: " + std::string(e.what())));
     }
 }
 
-Result<json> RemoteStore::GetKey(const std::string& gun, const std::string& role) {
+// GetKey - 对应Go版本的GetKey方法
+Result<std::vector<uint8_t>> HttpStore::GetKey(const std::string& name) {
     CURL* curl = curl_easy_init();
     if (!curl) {
-        return Result<json>(Error("Failed to initialize CURL"));
+        return Result<std::vector<uint8_t>>(Error("Failed to initialize CURL"));
     }
     
-    // 构建URL - 注意这里使用keyExtension_而不是metaExtension_
-    std::string url = serverURL_ + "/v2/" + gun + "/_trust/tuf/" + role + "." + keyExtension_;
+    // 构建URL - 使用buildKeyURL
+    // 例："http://localhost:4443/v2/docker.io/library/myapp/_trust/tuf/timestamp.key"
+    std::string url = buildKeyURL(name);
     
     // 设置CURL选项
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -139,7 +222,7 @@ Result<json> RemoteStore::GetKey(const std::string& gun, const std::string& role
     if (res != CURLE_OK) {
         std::string errorMsg = curl_easy_strerror(res);
         curl_easy_cleanup(curl);
-        return Result<json>(Error("CURL request failed: " + errorMsg));
+        return Result<std::vector<uint8_t>>(Error("CURL request failed: " + errorMsg));
     }
     
     // 获取HTTP状态码
@@ -148,61 +231,50 @@ Result<json> RemoteStore::GetKey(const std::string& gun, const std::string& role
     curl_easy_cleanup(curl);
 
     // 处理HTTP状态码
-    Error httpError = translateStatusToError(httpCode, role + " key");
+    Error httpError = translateStatusToError(httpCode, name + " key");
     if (!httpError.ok()) {
-        return Result<json>(httpError);
+        return Result<std::vector<uint8_t>>(httpError);
     }
     
     // 解析JSON响应
     try {
         // 响应格式应该是: {"keytype":"ecdsa","keyval":{"public":"BASE64_DATA","private":null}}
         json keyJson = json::parse(responseBuffer);
-        return Result<json>(keyJson);
+        
+        // 验证响应格式
+        if (!keyJson.contains("keyval") || !keyJson["keyval"].contains("public")) {
+            return Result<std::vector<uint8_t>>(Error("Invalid key response format"));
+        }
+        
+        // 将完整的JSON响应转换为字节数组返回
+        std::string keyJsonStr = keyJson.dump();
+        std::vector<uint8_t> result(keyJsonStr.begin(), keyJsonStr.end());
+        return Result<std::vector<uint8_t>>(std::move(result));
+        
     } catch (const json::exception& e) {
-        return Result<json>(Error("Failed to parse JSON key response: " + std::string(e.what())));
+        return Result<std::vector<uint8_t>>(Error("Failed to parse JSON key response: " + std::string(e.what())));
     }
 }
 
-// 用于multipart/form-data上传的辅助函数
-struct UploadData {
-    std::string data;
-    size_t pos = 0;
-};
-
-// 读取回调函数，用于上传数据
-static size_t ReadCallback(char* buffer, size_t size, size_t nitems, void* userdata) {
-    UploadData* uploadData = static_cast<UploadData*>(userdata);
-    size_t buffer_size = size * nitems;
-    
-    if (uploadData->pos >= uploadData->data.size()) {
-        return 0; // 数据已全部读取
-    }
-    
-    // 计算剩余要读取的数据量
-    size_t to_copy = std::min(buffer_size, uploadData->data.size() - uploadData->pos);
-    memcpy(buffer, uploadData->data.c_str() + uploadData->pos, to_copy);
-    uploadData->pos += to_copy;
-    
-    return to_copy;
-}
-
-Error RemoteStore::Set(const std::string& gun, const std::string& role, const json& data) {
+// Set - 对应Go版本的Set方法
+Error HttpStore::Set(const std::string& name, const std::vector<uint8_t>& data) {
     // 将单个元数据包装成map，复用SetMulti的逻辑
-    std::map<std::string, json> singleMeta;
-    singleMeta[role] = data;
+    std::map<std::string, std::vector<uint8_t>> singleMeta;
+    singleMeta[name] = data;
     
-    return SetMulti(gun, singleMeta);
+    return SetMulti(singleMeta);
 }
 
-// 批量发布多个元数据到远程 - 对应Go版本的SetMulti
-Error RemoteStore::SetMulti(const std::string& gun, const std::map<std::string, json>& metas) {
+// SetMulti - 对应Go版本的SetMulti方法
+Error HttpStore::SetMulti(const std::map<std::string, std::vector<uint8_t>>& metas) {
     CURL* curl = curl_easy_init();
     if (!curl) {
         return Error("Failed to initialize CURL");
     }
     
     // 构建URL - 对应Go版本的buildMetaURL("")
-    std::string url = serverURL_ + "/v2/" + gun + "/_trust/tuf/";
+    // 例："http://localhost:4443/v2/docker.io/library/myapp/_trust/tuf/"
+    std::string url = buildMetaURL("");
     
     // 设置CURL选项
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -220,12 +292,11 @@ Error RemoteStore::SetMulti(const std::string& gun, const std::map<std::string, 
         curl_mime_name(part, "files");
         curl_mime_filename(part, role.c_str()); // 文件名直接是角色名，不加扩展名
         
-        // 设置内容类型
+        // 设置内容类型为JSON，因为data虽然是vector<uint8_t>，但内容是JSON格式
         curl_mime_type(part, "application/json");
         
-        // 设置数据
-        std::string dataStr = data.dump();
-        curl_mime_data(part, dataStr.c_str(), dataStr.size());
+        // 设置数据 - data是JSON的字节表示，直接发送
+        curl_mime_data(part, reinterpret_cast<const char*>(data.data()), data.size());
     }
     
     // 设置multipart表单
@@ -258,23 +329,23 @@ Error RemoteStore::SetMulti(const std::string& gun, const std::map<std::string, 
     return translateStatusToError(httpCode, "POST metadata endpoint");
 }
 
-// 删除单个元数据文件 - 对应Go版本的Remove方法
+// Remove - 对应Go版本的Remove方法
 // 总是失败，因为我们永远不应该能够远程删除单个元数据文件
-Error RemoteStore::Remove(const std::string& name) {
+Error HttpStore::Remove(const std::string& name) {
     return Error("cannot delete individual metadata files");
 }
 
-// 删除GUN的所有远程元数据 (对应Go版本的RemoveAll)
-Result<bool> RemoteStore::RemoveAll() const {
+// RemoveAll - 对应Go版本的RemoveAll方法
+Error HttpStore::RemoveAll() {
     CURL* curl = curl_easy_init();
     if (!curl) {
-        return Result<bool>(Error("Failed to initialize CURL"));
+        return Error("Failed to initialize CURL");
     }
     
-    // 构建URL，空的元数据路径表示删除所有 (对应Go的buildMetaURL(""))
-    std::string url = serverURL_;
+    // 构建URL，空的元数据路径表示删除所有 - 对应Go版本的buildMetaURL("")
+    std::string url = buildMetaURL("");
     
-    // 设置CURL选项为DELETE请求 (对应Go的http.NewRequest("DELETE", url.String(), nil))
+    // 设置CURL选项为DELETE请求 - 对应Go版本的http.NewRequest("DELETE", url.String(), nil)
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");  // 设置DELETE方法
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -285,14 +356,14 @@ Result<bool> RemoteStore::RemoveAll() const {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
     
-    // 执行请求 (对应Go的s.roundTrip.RoundTrip(req))
+    // 执行请求 - 对应Go版本的s.roundTrip.RoundTrip(req)
     CURLcode res = curl_easy_perform(curl);
     
     // 检查请求是否成功
     if (res != CURLE_OK) {
         std::string errorMsg = curl_easy_strerror(res);
         curl_easy_cleanup(curl);
-        return Result<bool>(Error("CURL DELETE request failed: " + errorMsg));
+        return Error("CURL DELETE request failed: " + errorMsg);
     }
     
     // 获取HTTP状态码
@@ -300,22 +371,22 @@ Result<bool> RemoteStore::RemoveAll() const {
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
     curl_easy_cleanup(curl);
     
-    // 处理HTTP状态码 (对应Go的translateStatusToError)
-    Error httpError = translateStatusToError(httpCode, "DELETE metadata for GUN endpoint");
-    if (!httpError.ok()) {
-        return Result<bool>(httpError);
-    }
-    
-    // 删除成功
-    return Result<bool>(true);
+    // 处理HTTP状态码 - 对应Go版本的translateStatusToError
+    return translateStatusToError(httpCode, "DELETE metadata for GUN endpoint");
 }
 
-// 返回存储位置的可读名称 - 对应Go版本的Location
-std::string RemoteStore::Location() const {
-    // 从serverURL_中提取主机名，完全等价于Go版本的url.URL.Host
+// ListFiles - HttpStore不支持列出文件，返回空列表
+std::vector<std::string> HttpStore::ListFiles() {
+    // HTTP存储不支持列出文件操作
+    return {};
+}
+
+// Location - 对应Go版本的Location方法
+std::string HttpStore::Location() const {
+    // 从baseURL_中提取主机名，完全等价于Go版本的url.URL.Host
     // 例如: "https://user:pass@notary.docker.io:443/path" -> "notary.docker.io:443"
     
-    std::string url = serverURL_;
+    std::string url = baseURL_;
     
     // 移除协议前缀 (http:// 或 https://)
     size_t protocolPos = url.find("://");
