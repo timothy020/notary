@@ -481,7 +481,15 @@ Error GetHandler(const Context& ctx, Response& resp) {
                 .With("gun", gun)
                 .With("role", tufRole)
                 .With("error", result.error().what()));
-    return Error::ErrMetadataNotFound;
+        if (result.error().what().find("not found") != std::string::npos) {
+            utils::GetLogger().Info("元数据未找到", 
+                utils::LogContext()
+                    .With("gun", gun)
+                    .With("role", tufRole));
+            return Error::ErrMetadataNotFound;
+        } else {
+            return Error(1, "获取元数据失败: " + result.error().what()); // ErrUnknown
+        }
     }
     
     const auto& metadata = result.value();
