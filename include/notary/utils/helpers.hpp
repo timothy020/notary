@@ -45,5 +45,12 @@ namespace utils {
         const std::vector<std::string>& rootKeyIDs, 
         std::shared_ptr<crypto::CryptoService> cryptoService);
 
+    // 检查是否接近过期 (对应Go的nearExpiry函数)
+    bool nearExpiry(const std::chrono::system_clock::time_point& expires);
+
+    // warnRolesNearExpiry 检查接近过期的角色并发出警告
+    // 对应Go版本的warnRolesNearExpiry函数
+    void warnRolesNearExpiry(const std::shared_ptr<tuf::Repo>& repo);
+
 }
 }

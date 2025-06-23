@@ -171,7 +171,6 @@ public:
     ConsistentInfo getConsistentInfo(RoleName roleName) const override;
 
     // Root验证相关方法
-    Result<std::shared_ptr<SignedRoot>> validateRootIntegrity(std::shared_ptr<Signed> signedObj);
     Result<BaseRole> buildBaseRoleFromRoot(std::shared_ptr<SignedRoot> signedRoot, RoleName roleName);
     
     // 检查方法

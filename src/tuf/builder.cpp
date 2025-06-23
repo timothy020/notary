@@ -1006,58 +1006,6 @@ Error RepoBuilderImpl::validateChecksumsFromSnapshot(std::shared_ptr<SignedSnaps
     return Error(); // 成功
 }
 
-// 新增辅助方法的实现
-
-// TODO: 验证Root的完整性和一致性 - 对应Go版本的trustpinning.ValidateRoot的核心逻辑，后续需要进一步完善
-Result<std::shared_ptr<SignedRoot>> RepoBuilderImpl::validateRootIntegrity(std::shared_ptr<Signed> signedObj) {
-    // 创建SignedRoot对象
-    auto signedRoot = std::make_shared<SignedRoot>();
-    
-    // 从signedObj解析root内容
-    try {
-        std::string jsonStr(signedObj->signedData.begin(), signedObj->signedData.end());
-        json j = json::parse(jsonStr);
-        
-        // 解析到Root结构
-        signedRoot->Signed.fromJson(j);
-        signedRoot->Signatures = signedObj->Signatures;
-    } catch (const std::exception& e) {
-        return Result<std::shared_ptr<SignedRoot>>(Error("Failed to parse root from signed: " + std::string(e.what())));
-    }
-
-    // 如果有之前的root，使用它来验证这个新root（类似Go版本的root rotation逻辑）
-    if (prevRoot_) {
-        // 从之前的root获取root角色信息
-        auto prevRootRoleResult = repo_->GetBaseRole(RoleName::RootRole);
-        if (prevRootRoleResult.ok()) {
-            // 用之前root的密钥验证新root的签名
-            Error verifyErr = crypto::VerifySignatures(*signedObj, prevRootRoleResult.value());
-            if (verifyErr.hasError()) {
-                return Result<std::shared_ptr<SignedRoot>>(Error("failed to validate data with current trusted certificates: " + verifyErr.what()));
-            }
-            
-            // 清除IsValid标记（Go版本会做这个操作）
-            for (auto& sig : signedObj->Signatures) {
-                sig.IsValid = false;
-            }
-        }
-    }
-
-    // 验证新root的自签名完整性（无论是否有之前的root）
-    auto newRootRoleResult = buildBaseRoleFromRoot(signedRoot, RoleName::RootRole);
-    if (!newRootRoleResult.ok()) {
-        return Result<std::shared_ptr<SignedRoot>>(Error("failed to build base role from new root"));
-    }
-    
-    // 用新root自己的密钥验证签名
-    Error selfVerifyErr = crypto::VerifySignatures(*signedObj, newRootRoleResult.value());
-    if (selfVerifyErr.hasError()) {
-        return Result<std::shared_ptr<SignedRoot>>(Error("failed to validate integrity of roots: " + selfVerifyErr.what()));
-    }
-
-    return Result<std::shared_ptr<SignedRoot>>(signedRoot);
-}
-
 // 从Root对象构建BaseRole - 对应Go版本的BuildBaseRole方法
 Result<BaseRole> RepoBuilderImpl::buildBaseRoleFromRoot(std::shared_ptr<SignedRoot> signedRoot, RoleName roleName) {
     // 查找角色 - 直接使用RoleName作为键

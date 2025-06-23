@@ -55,10 +55,12 @@ class Result {
 public:
     Result() : hasError_(true) {}
     Result(const T& value) : value_(value), hasError_(false) {}
+    Result(T&& value) : value_(std::move(value)), hasError_(false) {}
     Result(const Error& error) : error_(error), hasError_(true) {}
     
     bool ok() const { return !hasError_; }
-    const T& value() const { return value_; }
+    const T& value() const & { return value_; }
+    T&& value() && { return std::move(value_); }
     const Error& error() const { return error_; }
     
 private:

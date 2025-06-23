@@ -441,5 +441,53 @@ Result<std::vector<std::shared_ptr<crypto::PrivateKey>>> getAllPrivKeys(
     return Result<std::vector<std::shared_ptr<crypto::PrivateKey>>>(privKeys);
 }
 
+// 检查是否接近过期 (对应Go的nearExpiry函数)
+bool nearExpiry(const std::chrono::system_clock::time_point& expires) {
+    auto plus6mo = std::chrono::system_clock::now() + std::chrono::hours(24 * 30 * 6); // 6个月
+    return expires < plus6mo;
+}
+
+// warnRolesNearExpiry实现
+// 对应Go版本的warnRolesNearExpiry函数
+// 检查接近过期的角色并发出警告
+void warnRolesNearExpiry(const std::shared_ptr<tuf::Repo>& repo) {
+    if (!repo) {
+        return; // 如果repo为空，直接返回
+    }
+    
+    try {
+        // 获取每个角色及其相应的signed common并调用nearExpiry检查
+        
+        // Root检查 (对应Go的if nearExpiry(r.Root.Signed.SignedCommon))
+        auto root = repo->GetRoot();
+        if (root && nearExpiry(root->Signed.Common.Expires)) {
+            utils::GetLogger().Warn("root is nearing expiry, you should re-sign the role metadata");
+        }
+        
+        // Targets和委托检查 (对应Go的for role, signedTOrD := range r.Targets)
+        auto targetsMap = repo->GetTargets(); 
+        for (const auto& [role, signedTargets] : targetsMap) {
+            // signedTargets是*data.SignedTargets类型
+            if (signedTargets && nearExpiry(signedTargets->Signed.Common.Expires)) {
+                std::string roleStr = roleToString(role);
+                utils::GetLogger().Warn(roleStr + " metadata is nearing expiry, you should re-sign the role metadata");
+            }
+        }
+        
+        // Snapshot检查 (对应Go的if nearExpiry(r.Snapshot.Signed.SignedCommon))
+        auto snapshot = repo->GetSnapshot();
+        if (snapshot && nearExpiry(snapshot->Signed.Common.Expires)) {
+            utils::GetLogger().Warn("snapshot is nearing expiry, you should re-sign the role metadata");
+        }
+        
+        // 不需要担心Timestamp，notary signer会用timestamp密钥重新签名
+        // (对应Go的注释: do not need to worry about Timestamp, notary signer will re-sign with the timestamp key)
+        
+    } catch (const std::exception& e) {
+        utils::GetLogger().Error("Failed to check role expiry", 
+            utils::LogContext().With("error", e.what()));
+    }
+}
+
 }
 }

@@ -662,16 +662,84 @@ void SignedTargets::AddTarget(const std::string& path, const FileMeta& meta) {
     Dirty = true;
 }
 
+// buildDelegationRoles辅助方法 - 对应Go版本的SignedTargets.buildDelegationRoles
+std::vector<DelegationRole> SignedTargets::buildDelegationRoles() const {
+    std::vector<DelegationRole> roles;
+    
+    // 遍历所有委托角色数据，构建DelegationRole对象
+    for (const auto& roleData : Signed.delegations.Roles) {
+        auto delegationRoleResult = BuildDelegationRole(roleData.Name);
+        if (delegationRoleResult.ok()) {
+            roles.push_back(delegationRoleResult.value());
+        }
+        // 如果构建失败，跳过这个角色（对应Go版本的continue）
+    }
+    
+    return roles;
+}
+
 std::vector<DelegationRole> SignedTargets::GetValidDelegations(const DelegationRole& parent) const {
-    // TODO: 实现委托角色过滤逻辑
-    // 这需要检查当前targets的delegations，并与parent角色进行路径限制
-    return {};
+    // 对应Go版本的SignedTargets.GetValidDelegations方法
+    // 过滤委托角色，只返回直接子角色并限制其路径
+    
+    std::vector<DelegationRole> roles = buildDelegationRoles();
+    std::vector<DelegationRole> result;
+    
+    for (const auto& role : roles) {
+        // 调用parent的Restrict方法来验证和限制子角色
+        auto validRoleResult = parent.Restrict(role);
+        if (validRoleResult.ok()) {
+            result.push_back(validRoleResult.value());
+        }
+        // 如果限制失败，跳过这个角色（对应Go版本的continue）
+    }
+    
+    return result;
 }
 
 Result<DelegationRole> SignedTargets::BuildDelegationRole(RoleName roleName) const {
-    // TODO: 实现委托角色构建逻辑
-    // 需要从delegations中查找指定的角色，并构建DelegationRole对象
-    return Result<DelegationRole>(Error("BuildDelegationRole not implemented"));
+    // 对应Go版本的SignedTargets.BuildDelegationRole方法
+    // 从委托中查找指定角色并构建DelegationRole对象
+    
+    // 遍历所有委托角色，查找匹配的角色名
+    for (const auto& role : Signed.delegations.Roles) {
+        if (role.Name == roleName) {
+            // 找到匹配的角色，现在需要构建完整的DelegationRole对象
+            
+            // 获取角色的所有公钥
+            std::map<std::string, std::shared_ptr<crypto::PublicKey>> pubKeys;
+            for (const auto& key : role.BaseRoleInfo.Keys()) {
+                std::string keyID = key->ID();
+                auto keyIt = Signed.delegations.Keys.find(keyID);
+                if (keyIt == Signed.delegations.Keys.end()) {
+                    // 找不到密钥，返回错误
+                    return Result<DelegationRole>(Error(
+                        "role lists unknown key " + keyID + " as a signing key"
+                    ));
+                }
+                pubKeys[keyID] = keyIt->second;
+            }
+            
+            // 创建新的DelegationRole对象
+            DelegationRole delegationRole;
+            delegationRole.Name = role.Name;
+            delegationRole.Paths = role.Paths;
+            
+            // 重新构建BaseRole，使用从Keys映射中找到的实际密钥
+            std::vector<std::shared_ptr<crypto::PublicKey>> roleKeys;
+            for (const auto& [keyId, key] : pubKeys) {
+                roleKeys.push_back(key);
+            }
+            
+            BaseRole baseRole(role.Name, role.BaseRoleInfo.Threshold(), roleKeys);
+            delegationRole.BaseRoleInfo = baseRole;
+            
+            return Result<DelegationRole>(delegationRole);
+        }
+    }
+    
+    // 没有找到角色
+    return Result<DelegationRole>(Error("Role not found: " + roleToString(roleName)));
 }
 
 // SignedSnapshot 实现
@@ -861,6 +929,69 @@ bool DelegationRole::CheckPaths(const std::string& path) const {
         }
     }
     return false;
+}
+
+// RestrictDelegationPathPrefixes辅助函数 - 对应Go版本的RestrictDelegationPathPrefixes
+std::vector<std::string> RestrictDelegationPathPrefixes(const std::vector<std::string>& parentPaths, 
+                                                        const std::vector<std::string>& delegationPaths) {
+    std::vector<std::string> validPaths;
+    
+    if (delegationPaths.empty()) {
+        return validPaths;
+    }
+    
+    // 验证每个委托路径
+    for (const auto& delgPath : delegationPaths) {
+        bool isPrefixed = false;
+        for (const auto& parentPath : parentPaths) {
+            if (delgPath.find(parentPath) == 0) {  // 使用前缀匹配
+                isPrefixed = true;
+                break;
+            }
+        }
+        // 如果委托路径没有匹配任何父路径的前缀，则无效
+        if (isPrefixed) {
+            validPaths.push_back(delgPath);
+        }
+    }
+    
+    return validPaths;
+}
+
+// IsParentOf实现 - 对应Go版本的DelegationRole.IsParentOf
+bool DelegationRole::IsParentOf(const DelegationRole& child) const {
+    // 通过委托名称确定传入的委托角色是否是此角色的直接子角色
+    // 例如：targets/a 是 targets/a/b 的直接父角色，但 targets/a 不是 targets/a/b/c 的直接父角色
+    std::string childNameStr = roleToString(child.Name);
+    std::string parentNameStr = roleToString(this->Name);
+    
+    // 获取子角色的父目录
+    size_t lastSlash = childNameStr.find_last_of('/');
+    if (lastSlash == std::string::npos) {
+        return false; // 子角色没有父目录
+    }
+    
+    std::string childParentDir = childNameStr.substr(0, lastSlash);
+    return childParentDir == parentNameStr;
+}
+
+// Restrict实现 - 对应Go版本的DelegationRole.Restrict
+Result<DelegationRole> DelegationRole::Restrict(const DelegationRole& child) const {
+    if (!IsParentOf(child)) {
+        return Result<DelegationRole>(Error(
+            roleToString(this->Name) + " is not a parent of " + roleToString(child.Name)
+        ));
+    }
+    
+    // 创建受限制的委托角色
+    DelegationRole restrictedRole;
+    restrictedRole.BaseRoleInfo = BaseRole(child.Name, child.BaseRoleInfo.Threshold(), child.BaseRoleInfo.Keys());
+    restrictedRole.Name = child.Name;
+    
+    // 使用RestrictDelegationPathPrefixes限制路径
+    restrictedRole.Paths = RestrictDelegationPathPrefixes(this->Paths, child.Paths);
+    
+    return Result<DelegationRole>(restrictedRole);
 }
 
 // Repo 实现

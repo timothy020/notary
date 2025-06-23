@@ -1,4 +1,5 @@
 #include "notary/client/repository.hpp"
+#include "notary/client/tufclient.hpp"
 #include "notary/tuf/repo.hpp"
 #include "notary/tuf/builder.hpp"
 #include "notary/utils/tools.hpp"
@@ -693,11 +694,6 @@ Error Repository::Publish() {
     }
 }
 
-// 检查是否接近过期 (对应Go的nearExpiry函数)
-bool nearExpiry(const std::chrono::system_clock::time_point& expires) {
-    auto plus6mo = std::chrono::system_clock::now() + std::chrono::hours(24 * 30 * 6); // 6个月
-    return expires < plus6mo;
-}
 
 // signRootIfNecessary函数实现 (对应Go的signRootIfNecessary函数)
 Error Repository::signRootIfNecessary(std::map<std::string, std::vector<uint8_t>>& updates, bool initialPublish) {
@@ -714,7 +710,7 @@ Error Repository::signRootIfNecessary(std::map<std::string, std::vector<uint8_t>
         bool needsUpdate = false;
         
         // 检查是否接近过期 (对应Go的nearExpiry(repo.Root.Signed.SignedCommon))
-        if (nearExpiry(root->Signed.Common.Expires)) {
+        if (utils::nearExpiry(root->Signed.Common.Expires)) {
             needsUpdate = true;
         }
         

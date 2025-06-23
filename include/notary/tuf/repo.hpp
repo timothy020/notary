@@ -103,6 +103,12 @@ public:
     
     bool CheckPaths(const std::string& path) const;
     
+    // 限制子角色的路径，返回限制后的角色副本
+    Result<DelegationRole> Restrict(const DelegationRole& child) const;
+    
+    // 检查是否是指定角色的直接父角色
+    bool IsParentOf(const DelegationRole& child) const;
+    
     // JSON 序列化支持
     json toJson() const;
     void fromJson(const json& j);
@@ -214,6 +220,10 @@ public:
     void AddTarget(const std::string& path, const FileMeta& meta);
     std::vector<DelegationRole> GetValidDelegations(const DelegationRole& parent) const;
     Result<DelegationRole> BuildDelegationRole(RoleName roleName) const;
+    
+private:
+    // 辅助方法：构建所有委托角色
+    std::vector<DelegationRole> buildDelegationRoles() const;
 };
 
 // 签名的Snapshot元数据（对应Go的SignedSnapshot结构体）
@@ -310,11 +320,6 @@ public:
     Result<std::shared_ptr<Signed>> SignTargets(RoleName role, const std::chrono::time_point<std::chrono::system_clock>& expires);
     Result<std::shared_ptr<Signed>> SignSnapshot(const std::chrono::time_point<std::chrono::system_clock>& expires);
     Result<std::shared_ptr<Signed>> SignTimestamp(const std::chrono::time_point<std::chrono::system_clock>& expires);
-    
-    // 目标管理
-    // Error AddTarget(const std::string& targetName, const std::vector<uint8_t>& targetData, 
-    //                RoleName role = RoleName::TargetsRole);
-    // Error RemoveTarget(const std::string& targetName, RoleName role = RoleName::TargetsRole);
     
     // 批量目标管理
     Error AddTargets(RoleName role, const std::map<std::string, FileMeta>& targets);
