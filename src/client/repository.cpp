@@ -567,8 +567,7 @@ Error Repository::Publish() {
         auto err = updateTUF(true);
         if (!err.ok()) {
             // 检查是否是仓库不存在的错误 (对应Go的ErrRepositoryNotExist检查)
-            if (std::string(err.what()).find("Repository not found") != std::string::npos ||
-                std::string(err.what()).find("repository does not exist") != std::string::npos) {
+            if (std::string(err.what()).find("does not exist") != std::string::npos) {
                 
                 // 尝试从本地缓存加载 (对应Go的r.bootstrapRepo())
                 utils::GetLogger().Info("尝试从本地缓存加载", utils::LogContext().With("gun", gun_.empty() ? "default" : gun_));
@@ -782,48 +781,38 @@ Error Repository::signTargets(std::map<std::string, std::vector<uint8_t>>& updat
     }
 }
 
-Error Repository::updateTUF(bool force) {
+Error Repository::updateTUF(bool forWrite) {
+    // 对应Go版本的updateTUF方法
+    // 使用LoadTUFRepo来加载TUF仓库
     try {
-        std::string gunStr = gun_.empty() ? "default" : gun_;
+        // 构建TUFLoadOptions (对应Go版本的TUFLoadOptions)
+        client::TUFLoadOptions options;
+        options.GUN = gun_;
+        options.TrustPinning = tuf::TrustPinConfig{}; // 使用空的信任锚定配置
+        options.CryptoService = cryptoService_;
+        options.Cache = cache_;
+        options.RemoteStore = remoteStore_;
+        options.AlwaysCheckInitialized = forWrite; // 对应Go版本的forWrite参数
         
-        // 尝试从远程获取最新的元数据
-        auto rootResult = remoteStore_->GetSized("root", NO_SIZE_LIMIT);
-        if (!rootResult.ok()) {
-            utils::GetLogger().Info("Repository not found", utils::LogContext().With("gun", gunStr));
-            return Error("Repository not found");
+        // 调用LoadTUFRepo函数 (对应Go版本的LoadTUFRepo)
+        auto repoResult = client::LoadTUFRepo(options);
+        if (!repoResult.ok()) {
+            return repoResult.error();
         }
         
-        // GetSized已经返回字节数组，直接使用
-        std::vector<uint8_t> rootData = rootResult.value();
-
-        // 更新本地缓存
-        auto err = cache_->Set(ROOT_ROLE, rootData);
-        if (!err.ok()) {
-            return err;
-        }
+        // 获取结果 (对应Go版本的repo, invalid, err := LoadTUFRepo(...))
+        auto repos = repoResult.value();
+        auto repo = std::get<0>(repos);
+        auto invalid = std::get<1>(repos);
         
-        // 获取并更新其他角色的元数据
-        std::vector<std::string> roles = {"targets", "snapshot", "timestamp"};
-        for (const auto& role : roles) {
-            auto result = remoteStore_->GetSized(role, NO_SIZE_LIMIT);
-            if (result.ok()) {
-                std::string roleKey = role == "targets" ? TARGETS_ROLE : role == "snapshot" ? SNAPSHOT_ROLE : TIMESTAMP_ROLE;
-                // GetSized已经返回字节数组，直接使用
-                std::vector<uint8_t> roleData = result.value();
-                err = cache_->Set(roleKey, roleData);
-                if (!err.ok()) {
-                    return err;
-                }
-            }
-        }
-
-        // 然后从本地缓存加载到Repo
-        err = bootstrapRepo();
-        if(!err.ok()) {
-            utils::GetLogger().Info("updateTUF failed!", utils::LogContext().With("error", err.what()));
-        }
+        // 设置TUF仓库 (对应Go版本的r.tufRepo = repo)
+        tufRepo_ = repo;
         
-        return Error();
+        // 设置无效仓库 (对应Go版本的r.invalid = invalid)
+        invalidRepo_ = invalid;
+        
+        return Error(); // 成功
+        
     } catch (const std::exception& e) {
         return Error(std::string("Failed to update TUF: ") + e.what());
     }

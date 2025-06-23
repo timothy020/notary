@@ -527,7 +527,6 @@ Error RepoBuilderImpl::loadRoot(const std::vector<uint8_t>& content, int minVers
     // 设置原始root角色用于轮换验证（对应Go版本的rb.repo.originalRootRole = rootRole）
     repo_->SetOriginalRootRole(rootRoleResult.value());
 
-    utils::GetLogger().Info("loadRoot: Successfully loaded and validated root for GUN: " + gun_);
     return Error(); // 成功
 }
 
@@ -926,7 +925,7 @@ std::shared_ptr<std::map<std::string, std::vector<uint8_t>>> RepoBuilderImpl::ge
             return nullptr;
         case RoleName::SnapshotRole:
             if (auto timestamp = repo_->GetTimestamp()) {
-                auto it = timestamp->Signed.Meta.find(roleToString(role));
+                auto it = timestamp->Signed.Meta.find(roleToString(role) + ".json");
                 if (it != timestamp->Signed.Meta.end()) {
                     hashes = it->second.Hashes;
                 }
@@ -937,7 +936,7 @@ std::shared_ptr<std::map<std::string, std::vector<uint8_t>>> RepoBuilderImpl::ge
         default:
             // root、targets等角色从snapshot中获取校验和
             if (auto snapshot = repo_->GetSnapshot()) {
-                auto it = snapshot->Signed.Meta.find(roleToString(role));
+                auto it = snapshot->Signed.Meta.find(roleToString(role) + ".json");
                 if (it != snapshot->Signed.Meta.end()) {
                     hashes = it->second.Hashes;
                 }
@@ -959,7 +958,7 @@ Error RepoBuilderImpl::validateChecksumsFromTimestamp(std::shared_ptr<SignedTime
     auto it = loadedNotChecksummed_.find(RoleName::SnapshotRole);
     if (it != loadedNotChecksummed_.end()) {
         // 到这一点，SignedTimestamp已经被验证，所以它必须有snapshot哈希
-        auto snMetaIt = ts->Signed.Meta.find(roleToString(RoleName::SnapshotRole));
+        auto snMetaIt = ts->Signed.Meta.find(roleToString(RoleName::SnapshotRole) + ".json");
         if (snMetaIt != ts->Signed.Meta.end()) {
             Error err = utils::CheckHashes(it->second, roleToString(RoleName::SnapshotRole), snMetaIt->second.Hashes);
             if (err.hasError()) {
@@ -988,7 +987,7 @@ Error RepoBuilderImpl::validateChecksumsFromSnapshot(std::shared_ptr<SignedSnaps
         }
         
         // 查找该角色在snapshot中的元数据
-        auto metaIt = sn->Signed.Meta.find(roleToString(roleName));
+        auto metaIt = sn->Signed.Meta.find(roleToString(roleName) + ".json");
         if (metaIt != sn->Signed.Meta.end()) {
             Error err = utils::CheckHashes(loadedBytes, roleToString(roleName), metaIt->second.Hashes);
             if (err.hasError()) {

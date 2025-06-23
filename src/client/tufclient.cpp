@@ -87,7 +87,7 @@ Result<std::vector<uint8_t>> TUFClient::tryLoadCacheThenRemote(const tuf::Consis
     if (!cachedResult.ok()) {
         // 直接告诉远程助理："我的书架上没有这本书，你去中央图书馆帮我拿一本新的。"
         // 空的vector表示我们手头没有任何旧版本可以参考
-        utils::GetLogger().Debug("no " + roleToString(consistentInfo.getRoleName()) + " in cache, must download");
+        utils::GetLogger().Info("no " + roleToString(consistentInfo.getRoleName()) + " in cache, must download");
         return tryLoadRemote(consistentInfo, std::vector<uint8_t>());
     }
     
@@ -101,13 +101,13 @@ Result<std::vector<uint8_t>> TUFClient::tryLoadCacheThenRemote(const tuf::Consis
     if (loadErr.ok()) {
         // 如果验证通过，太好了！这本书是好的
         // 直接返回这本书的内容，无需联系中央图书馆，任务完成
-        utils::GetLogger().Debug("successfully verified cached " + roleToString(consistentInfo.getRoleName()));
+        utils::GetLogger().Info("successfully verified cached " + roleToString(consistentInfo.getRoleName()));
         return Result<std::vector<uint8_t>>(cachedData);
     }
     
     // 4. 步骤四：如果书架上的书已经过时或损坏(验证失败)
     // 记录一条日志，说明本地的这本书不行了
-    utils::GetLogger().Debug("cached " + roleToString(consistentInfo.getRoleName()) + " is invalid (must download): " + loadErr.what());
+    utils::GetLogger().Info("cached " + roleToString(consistentInfo.getRoleName()) + " is invalid (must download): " + loadErr.what());
     
     // 告诉远程助理："我书架上这本书有问题，你去中央图书馆帮我拿一本新的。
     // 为了防止他们给我一本更旧的，我把这本有问题的书也给你，你参考一下它的版本号。"
@@ -526,23 +526,22 @@ Error TUFClient::update() {
     // 1. 下载timestamp
     auto timestampErr = downloadTimestamp();
     if (!timestampErr.ok()) {
-        utils::GetLogger().Debug("Client Update (Timestamp): " + timestampErr.what());
         return timestampErr;
     }
+    utils::GetLogger().Info("Client Update (Timestamp): Success");
     
     // 2. 下载snapshot
     auto snapshotErr = downloadSnapshot();
     if (!snapshotErr.ok()) {
-        utils::GetLogger().Debug("Client Update (Snapshot): " + snapshotErr.what());
         return snapshotErr;
     }
-    
+    utils::GetLogger().Info("Client Update (Snapshot): Success");
     // 3. 总是需要至少顶层targets
     auto targetsErr = downloadTargets();
     if (!targetsErr.ok()) {
-        utils::GetLogger().Debug("Client Update (Targets): " + targetsErr.what());
         return targetsErr;
     }
+    utils::GetLogger().Info("Client Update Success");
     
     return Error(); // 成功
 }
@@ -687,7 +686,6 @@ Result<std::tuple<std::shared_ptr<tuf::Repo>, std::shared_ptr<tuf::Repo>>> LoadT
         // 返回其他错误
         return Result<std::tuple<std::shared_ptr<tuf::Repo>, std::shared_ptr<tuf::Repo>>>(err);
     }
-
     auto&& client = clientResult.value();
     
     // 调用 Update 方法更新 TUF 仓库的元数据：
