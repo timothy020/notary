@@ -1038,10 +1038,11 @@ int main(int argc, char** argv) {
         }
     });
     
-         // key 命令组
-     auto key = app.add_subcommand("key", "Manage signing keys");
-     auto keysList = key->add_subcommand("list", "List all signing keys");
-     auto keyRemove = key->add_subcommand("remove", "Remove a signing key");
+    // ======================== key 命令组 ========================
+    auto key = app.add_subcommand("key", "Manage signing keys");
+    auto keysList = key->add_subcommand("list", "List all signing keys");
+    auto keyRemove = key->add_subcommand("remove", "Remove a signing key");
+    auto keyPasswd = key->add_subcommand("passwd", "Change the passphrase for a signing key");
     
     keysList->callback([&]() {
         try {
@@ -1083,56 +1084,145 @@ int main(int argc, char** argv) {
         }
     });
     
-         keyRemove->add_option("key_id", keyID, "Key ID to remove")->required();
+    keyRemove->add_option("key_id", keyID, "Key ID to remove")->required();
+    keyPasswd->add_option("key_id", keyID, "Key ID to change passphrase for")->required();
     
-         keyRemove->callback([&]() {
-         try {
-             // 1. 验证keyID长度（对应Go的SHA256HexSize检查）
-             if (keyID.length() != 64) {  // SHA256的十六进制长度是64个字符
-                 utils::GetLogger().Error("Invalid key ID provided: " + keyID);
-                 return;
-             }
-             
-             // 2. 加载配置
-             auto configErr = loadConfig(configFile, trustDir, serverURL);
-             if (!configErr.ok()) {
-                 utils::GetLogger().Error("Error loading configuration: " + configErr.what());
-                 return;
-             }
-             
-             if (debug) {
-                 utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
-                     .With("serverURL", serverURL));
-                 utils::GetLogger().Info("Removing key with ID: " + keyID, utils::LogContext()
-                     .With("keyID", keyID));
-             }
-             
-             // 3. 创建密码获取器
-             auto passRetriever = passphrase::PromptRetriever();
-             
-             // 4. 获取密钥存储列表
-             auto keyStores = getKeyStores(trustDir, passRetriever, true, false);
-             
-             if (keyStores.empty()) {
-                 utils::GetLogger().Error("Failed to create key stores");
-                 return;
-             }
-             
-             // 5. 交互式删除密钥
-             std::cout << std::endl;
-             auto removeErr = removeKeyInteractively(keyStores, keyID, std::cin, std::cout);
-             std::cout << std::endl;
-             
-             if (removeErr.hasError()) {
-                 utils::GetLogger().Error("Error removing key: " + removeErr.what());
-                 return;
-             }
-             
-         } catch (const std::exception& e) {
-             utils::GetLogger().Error("Error: " + std::string(e.what()));
-             return;
-         }
-     });
+    keyRemove->callback([&]() {
+        try {
+            // 1. 验证keyID长度（对应Go的SHA256HexSize检查）
+            if (keyID.length() != 64) {  // SHA256的十六进制长度是64个字符
+                utils::GetLogger().Error("Invalid key ID provided: " + keyID);
+                return;
+            }
+            
+            // 2. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Removing key with ID: " + keyID, utils::LogContext()
+                    .With("keyID", keyID));
+            }
+            
+            // 3. 创建密码获取器
+            auto passRetriever = passphrase::PromptRetriever();
+            
+            // 4. 获取密钥存储列表
+            auto keyStores = getKeyStores(trustDir, passRetriever, true, false);
+            
+            if (keyStores.empty()) {
+                utils::GetLogger().Error("Failed to create key stores");
+                return;
+            }
+            
+            // 5. 交互式删除密钥
+            std::cout << std::endl;
+            auto removeErr = removeKeyInteractively(keyStores, keyID, std::cin, std::cout);
+            std::cout << std::endl;
+            
+            if (removeErr.hasError()) {
+                utils::GetLogger().Error("Error removing key: " + removeErr.what());
+                return;
+            }
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+     
+    keyPasswd->callback([&]() {
+        try {
+            // 1. 验证keyID长度（对应Go的SHA256HexSize检查）
+            if (keyID.length() != 64) {  // SHA256的十六进制长度是64个字符
+                utils::GetLogger().Error("Invalid key ID provided: " + keyID);
+                return;
+            }
+            
+            // 2. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Changing passphrase for key ID: " + keyID, utils::LogContext()
+                    .With("keyID", keyID));
+            }
+            
+            // 3. 创建密码获取器
+            auto passRetriever = passphrase::PromptRetriever();
+            
+            // 4. 获取密钥存储列表
+            auto keyStores = getKeyStores(trustDir, passRetriever, true, false);
+            
+            if (keyStores.empty()) {
+                utils::GetLogger().Error("Failed to create key stores");
+                return;
+            }
+            
+            // 5. 在所有密钥存储中查找该密钥（对应Go的for循环查找）
+            storage::GenericKeyStore* foundKeyStore = nullptr;
+            std::shared_ptr<crypto::PrivateKey> privKey = nullptr;
+            RoleName keyRole;
+            
+            for (auto& store : keyStores) {
+                auto keyResult = store->GetKey(keyID);
+                if (keyResult.ok()) {
+                    auto [foundPrivKey, foundRole] = keyResult.value();
+                    foundKeyStore = store.get();
+                    privKey = foundPrivKey;
+                    keyRole = foundRole;
+                    break;
+                }
+            }
+            
+            if (!foundKeyStore || !privKey) {
+                utils::GetLogger().Error("Could not retrieve local key for key ID provided: " + keyID);
+                return;
+            }
+            
+            // 6. 获取密钥信息
+            auto keyInfoResult = foundKeyStore->GetKeyInfo(keyID);
+            if (!keyInfoResult.ok()) {
+                utils::GetLogger().Error("Could not get key info for key ID: " + keyID);
+                return;
+            }
+            auto keyInfo = keyInfoResult.value();
+            
+            // 7. 创建新的密码获取器用于更改密码（对应Go的passChangeRetriever）
+            auto newPassRetriever = passphrase::PromptRetriever();
+            
+            // 8. 创建新的密钥存储用于重新添加密钥（这样就更改了密码）
+            std::string privateDir = trustDir + "/private";
+            auto addingKeyStore = storage::NewKeyFileStore(privateDir, newPassRetriever);
+            if (!addingKeyStore) {
+                utils::GetLogger().Error("Failed to create key store for password change");
+                return;
+            }
+            
+            // 9. 重新添加密钥，这会提示用户输入新密码
+            auto addErr = addingKeyStore->AddKey(keyInfo, privKey);
+            if (addErr.hasError()) {
+                utils::GetLogger().Error("Failed to update key passphrase: " + addErr.what());
+                return;
+            }
+            
+            std::cout << "\nSuccessfully updated passphrase for key ID: " + keyID << std::endl;
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
     
     try {
         app.parse(argc, argv);
