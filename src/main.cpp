@@ -2,14 +2,266 @@
 #include <fstream>
 #include <CLI/CLI.hpp>
 #include "notary/client/repository.hpp"
+#include "notary/storage/keystore.hpp"
+#include "notary/passRetriever/passRetriever.hpp"
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <algorithm>
 
 using namespace notary;
 
 // 使用标准filesystem命名空间
 namespace fs = std::filesystem;
+
+// 密钥信息结构（用于排序和显示）
+struct KeyDisplayInfo {
+    std::string gun;       // 仓库名称
+    RoleName role;         // 密钥角色
+    std::string keyID;     // 密钥ID
+    std::string location;  // 密钥存储位置
+    
+    KeyDisplayInfo(const std::string& g, RoleName r, const std::string& id, const std::string& loc)
+        : gun(g), role(r), keyID(id), location(loc) {}
+};
+
+// 字符串截断函数（对应Go的truncateWithEllipsis）
+std::string truncateWithEllipsis(const std::string& str, size_t maxWidth, bool leftTruncate = false) {
+    if (str.length() <= maxWidth) {
+        return str;
+    }
+    
+    if (leftTruncate) {
+        return "..." + str.substr(str.length() - (maxWidth - 3));
+    } else {
+        return str.substr(0, maxWidth - 3) + "...";
+    }
+}
+
+// 密钥信息排序比较器（对应Go的keyInfoSorter）
+bool compareKeyInfo(const KeyDisplayInfo& a, const KeyDisplayInfo& b) {
+    // 特殊处理root角色 - root角色总是排在前面
+    if (a.role != b.role) {
+        if (a.role == RoleName::RootRole) {
+            return true;
+        }
+        if (b.role == RoleName::RootRole) {
+            return false;
+        }
+        // 其他角色按字符串顺序排序
+    }
+    
+    // 排序顺序：GUN, role, keyID, location
+    std::vector<std::string> orderedA = {
+        a.gun, 
+        roleToString(a.role), 
+        a.keyID, 
+        a.location
+    };
+    std::vector<std::string> orderedB = {
+        b.gun, 
+        roleToString(b.role), 
+        b.keyID, 
+        b.location
+    };
+    
+    for (size_t i = 0; i < 4; ++i) {
+        if (orderedA[i] < orderedB[i]) {
+            return true;
+        } else if (orderedA[i] > orderedB[i]) {
+            return false;
+        }
+        // 继续比较下一个字段
+    }
+    
+    return false; // 完全相等
+}
+
+// 美化打印密钥列表（对应Go的prettyPrintKeys函数）
+void prettyPrintKeys(const std::vector<std::unique_ptr<storage::GenericKeyStore>>& keyStores) {
+    const size_t maxGUNWidth = 25;
+    const size_t maxLocWidth = 40;
+    
+    std::vector<KeyDisplayInfo> info;
+    
+    // 从所有密钥存储中收集密钥信息
+    for (const auto& store : keyStores) {
+        auto keyInfoMap = store->ListKeys();
+        for (const auto& [keyID, keyInfo] : keyInfoMap) {
+            info.emplace_back(keyInfo.gun, keyInfo.role, keyID, store->Name());
+        }
+    }
+    
+    // 如果没有密钥，显示提示信息
+    if (info.empty()) {
+        std::cout << "No signing keys found." << std::endl;
+        return;
+    }
+    
+    // 排序密钥信息
+    std::sort(info.begin(), info.end(), compareKeyInfo);
+    
+    // 打印表头
+    std::cout << std::left
+              << std::setw(15) << "ROLE"
+              << std::setw(maxGUNWidth + 2) << "GUN"
+              << std::setw(66) << "KEY ID"  // 64位哈希 + 一些空间
+              << std::setw(maxLocWidth + 2) << "LOCATION"
+              << std::endl;
+    
+    // 打印分隔线（对应Go版本的格式）
+    std::cout << std::left
+              << std::setw(15) << "----"
+              << std::setw(maxGUNWidth + 2) << "---"
+              << std::setw(66) << "------"
+              << std::setw(maxLocWidth + 2) << "--------"
+              << std::endl;
+    
+    // 打印每个密钥的信息
+    for (const auto& keyInfo : info) {
+        std::cout << std::left
+                  << std::setw(15) << roleToString(keyInfo.role)
+                  << std::setw(maxGUNWidth + 2) << truncateWithEllipsis(keyInfo.gun, maxGUNWidth, true)
+                  << std::setw(66) << keyInfo.keyID
+                  << std::setw(maxLocWidth + 2) << truncateWithEllipsis(keyInfo.location, maxLocWidth, true)
+                  << std::endl;
+    }
+}
+
+// 确认函数（对应Go的askConfirm）
+bool askConfirm(std::istream& input) {
+    std::string response;
+    if (!std::getline(input, response)) {
+        return false;
+    }
+    
+    // 去除首尾空格并转换为小写
+    response.erase(0, response.find_first_not_of(" \t"));
+    response.erase(response.find_last_not_of(" \t") + 1);
+    std::transform(response.begin(), response.end(), response.begin(), ::tolower);
+    
+    return (response == "y" || response == "yes");
+}
+
+// 结构存储找到的密钥信息
+struct FoundKeyInfo {
+    std::string keypath;
+    std::string role;
+    std::string location;
+    storage::GenericKeyStore* store;
+    
+    FoundKeyInfo(const std::string& path, const std::string& r, const std::string& loc, 
+                 storage::GenericKeyStore* s) 
+        : keypath(path), role(r), location(loc), store(s) {}
+};
+
+// 交互式删除密钥（对应Go的removeKeyInteractively）
+Error removeKeyInteractively(const std::vector<std::unique_ptr<storage::GenericKeyStore>>& keyStores, 
+                            const std::string& keyID,
+                            std::istream& input, 
+                            std::ostream& output) {
+    
+    std::vector<FoundKeyInfo> foundKeys;
+    
+    // 搜索所有密钥存储中的匹配密钥
+    for (const auto& store : keyStores) {
+        auto keyInfoMap = store->ListKeys();
+        for (const auto& [fullKeyID, keyInfo] : keyInfoMap) {
+            // 检查keyID是否匹配（完整匹配或以keyID开头）
+            if (fullKeyID == keyID || fullKeyID.find(keyID) == 0) {
+                foundKeys.emplace_back(fullKeyID, roleToString(keyInfo.role), 
+                                     store->Name(), store.get());
+            }
+        }
+    }
+    
+    if (foundKeys.empty()) {
+        return Error("no key with ID " + keyID + " found");
+    }
+    
+    // 如果找到多个密钥，让用户选择
+    if (foundKeys.size() > 1) {
+        while (true) {
+            // 询问用户选择删除哪个密钥
+            output << "Found the following matching keys:" << std::endl;
+            for (size_t i = 0; i < foundKeys.size(); ++i) {
+                const auto& info = foundKeys[i];
+                output << "\t" << (i + 1) << ". " << info.keypath << ": " 
+                       << info.role << " (" << info.location << ")" << std::endl;
+            }
+            output << "Which would you like to delete?  Please enter a number:  ";
+            output.flush();
+            
+            std::string result;
+            if (!std::getline(input, result)) {
+                return Error("Failed to read user input");
+            }
+            
+            // 尝试解析用户输入的数字
+            try {
+                int index = std::stoi(result);
+                if (index >= 1 && index <= static_cast<int>(foundKeys.size())) {
+                    // 用户选择有效，只保留选中的密钥
+                    FoundKeyInfo selected = foundKeys[index - 1];
+                    foundKeys.clear();
+                    foundKeys.push_back(selected);
+                    output << std::endl;
+                    break;
+                }
+            } catch (const std::exception&) {
+                // 解析失败，继续循环
+            }
+            
+            output << "\nInvalid choice: " << result << std::endl;
+        }
+    }
+    
+    // 现在应该只有一个密钥，请求确认删除
+    const auto& keyInfo = foundKeys[0];
+    std::string keyDescription = keyInfo.keypath + " (role " + keyInfo.role + ") from " + keyInfo.location;
+    
+    output << "Are you sure you want to remove " << keyDescription << "?  (yes/no)  ";
+    output.flush();
+    
+    if (!askConfirm(input)) {
+        output << "\nAborting action." << std::endl;
+        return Error(); // 不是错误，只是用户取消
+    }
+    
+    // 执行删除
+    auto removeErr = keyInfo.store->RemoveKey(keyInfo.keypath);
+    if (removeErr.hasError()) {
+        return removeErr;
+    }
+    
+    output << "\nDeleted " << keyDescription << "." << std::endl;
+    return Error(); // 成功
+}
+
+// 获取密钥存储列表（对应Go的getKeyStores）
+std::vector<std::unique_ptr<storage::GenericKeyStore>> getKeyStores(
+    const std::string& trustDir, 
+    passphrase::PassRetriever passRetriever,
+    bool withHardware = false,
+    bool hardwareBackup = false) {
+    
+    std::vector<std::unique_ptr<storage::GenericKeyStore>> keyStores;
+    
+    // 创建文件密钥存储 - 在trustDir后面添加"private"目录（对应Go的NewPrivateKeyFileStorage）
+    std::string privateDir = trustDir + "/private";
+    auto fileKeyStore = storage::NewKeyFileStore(privateDir, passRetriever);
+    if (fileKeyStore) {
+        keyStores.push_back(std::move(fileKeyStore));
+    }
+    
+    // TODO: 如果需要支持硬件密钥存储（如YubiKey），在这里添加
+    // 目前只支持文件存储
+    if (withHardware) {
+        utils::GetLogger().Warn("Hardware key stores not yet implemented in C++ version");
+    }
+    
+    return keyStores;
+}
 
 // 美化打印目标列表 (对应Go的prettyPrintTargets函数)
 void prettyPrintTargets(const std::vector<TargetWithRole>& targets) {
@@ -226,6 +478,7 @@ int main(int argc, char** argv) {
     std::string configFile;
     std::string trustDir;
     std::string serverURL;
+    std::string keyID;
     bool debug = false;
     
     app.add_option("-c,--config", configFile, "Configuration file path");
@@ -784,6 +1037,102 @@ int main(int argc, char** argv) {
             return;
         }
     });
+    
+         // key 命令组
+     auto key = app.add_subcommand("key", "Manage signing keys");
+     auto keysList = key->add_subcommand("list", "List all signing keys");
+     auto keyRemove = key->add_subcommand("remove", "Remove a signing key");
+    
+    keysList->callback([&]() {
+        try {
+            // 1. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Using server URL: " + serverURL, utils::LogContext()
+                    .With("serverURL", serverURL));
+                utils::GetLogger().Info("Listing keys for GUN: " + gun, utils::LogContext()
+                    .With("serverURL", serverURL));
+            }
+            
+            // 2. 创建密码获取器
+             auto passRetriever = passphrase::PromptRetriever();
+             
+             // 3. 获取密钥存储列表
+             auto keyStores = getKeyStores(trustDir, passRetriever, true, false);
+             
+             if (keyStores.empty()) {
+                 utils::GetLogger().Error("Failed to create key stores");
+                 return;
+             }
+             
+             // 4. 美化打印密钥列表
+             std::cout << std::endl;
+             prettyPrintKeys(keyStores);
+             std::cout << std::endl;
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+         keyRemove->add_option("key_id", keyID, "Key ID to remove")->required();
+    
+         keyRemove->callback([&]() {
+         try {
+             // 1. 验证keyID长度（对应Go的SHA256HexSize检查）
+             if (keyID.length() != 64) {  // SHA256的十六进制长度是64个字符
+                 utils::GetLogger().Error("Invalid key ID provided: " + keyID);
+                 return;
+             }
+             
+             // 2. 加载配置
+             auto configErr = loadConfig(configFile, trustDir, serverURL);
+             if (!configErr.ok()) {
+                 utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                 return;
+             }
+             
+             if (debug) {
+                 utils::GetLogger().Info("Using trust directory: " + trustDir, utils::LogContext()
+                     .With("serverURL", serverURL));
+                 utils::GetLogger().Info("Removing key with ID: " + keyID, utils::LogContext()
+                     .With("keyID", keyID));
+             }
+             
+             // 3. 创建密码获取器
+             auto passRetriever = passphrase::PromptRetriever();
+             
+             // 4. 获取密钥存储列表
+             auto keyStores = getKeyStores(trustDir, passRetriever, true, false);
+             
+             if (keyStores.empty()) {
+                 utils::GetLogger().Error("Failed to create key stores");
+                 return;
+             }
+             
+             // 5. 交互式删除密钥
+             std::cout << std::endl;
+             auto removeErr = removeKeyInteractively(keyStores, keyID, std::cin, std::cout);
+             std::cout << std::endl;
+             
+             if (removeErr.hasError()) {
+                 utils::GetLogger().Error("Error removing key: " + removeErr.what());
+                 return;
+             }
+             
+         } catch (const std::exception& e) {
+             utils::GetLogger().Error("Error: " + std::string(e.what()));
+             return;
+         }
+     });
     
     try {
         app.parse(argc, argv);
