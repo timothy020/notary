@@ -4,10 +4,16 @@
 #include "notary/client/repository.hpp"
 #include "notary/storage/keystore.hpp"
 #include "notary/passRetriever/passRetriever.hpp"
+#include "notary/crypto/crypto_service.hpp"
+#include "notary/utils/tools.hpp"
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <sys/stat.h>
+#include <openssl/ec.h>
+#include <openssl/pem.h>
+#include <ctime>
 
 using namespace notary;
 
@@ -435,6 +441,165 @@ Error maybeAutoPublish(bool autoPublish, const std::string& gun,
     utils::GetLogger().Info("Publishing changes to " + gun, utils::LogContext()
         .With("serverURL", serverURL));
     return repo.Publish(); // 调用Repository类的Publish方法
+}
+
+
+
+// 生成密钥到文件 - 对应Go版本的generateKeyToFile函数
+Error generateKeyToFile(const std::string& role, 
+                       const std::string& algorithm, 
+                       passphrase::PassRetriever passRetriever,
+                       const std::string& outFile) {
+    try {
+        // 1. 验证算法 (对应Go版本的allowedCiphers检查)
+        if (algorithm != "ecdsa") {
+            return Error("algorithm not allowed, possible values are: ECDSA");
+        }
+        
+        // 2. 生成私钥 (对应Go版本的tufutils.GenerateKey(algorithm))
+        crypto::CryptoService cryptoService;
+        auto keyResult = cryptoService.GeneratePrivateKey(algorithm);
+        if (!keyResult.ok()) {
+            return Error("Failed to generate private key: " + keyResult.error().what());
+        }
+        
+        auto privKey = keyResult.value();
+        
+        // 从私钥获取公钥 (对应Go版本的data.PublicKeyFromPrivate(privKey))
+        auto pubKey = privKey->GetPublicKey();
+        
+        // 3. 获取密码 (对应Go版本的密码获取循环)
+        std::string chosenPassphrase;
+        bool giveup = false;
+        std::string keyID = privKey->ID();
+        int attempts = 0;
+        
+        for (attempts = 0; attempts <= 10; ++attempts) {
+            auto passResult = passRetriever(keyID, "", true, attempts);
+            auto passphrase = std::get<0>(passResult);
+            auto giveupFlag = std::get<1>(passResult);
+            auto error = std::get<2>(passResult);
+            
+            if (error.hasError()) {
+                if (giveupFlag || attempts >= 10) {
+                    return Error("Password retrieval attempts exceeded");
+                }
+                continue;
+            }
+            
+            if (passphrase.empty() && giveupFlag) {
+                giveup = true;
+                break;
+            }
+            if (!passphrase.empty()) {
+                chosenPassphrase = passphrase;
+                break;
+            }
+        }
+        
+        if (giveup || attempts > 10) {
+            return Error("Password retrieval attempts exceeded");
+        }
+        
+        if (chosenPassphrase.empty()) {
+            return Error("No password provided");
+        }
+        
+        // 4. 转换私钥为PKCS8格式 (对应Go版本的tufutils.ConvertPrivateKeyToPKCS8)
+        std::string pemPrivKey;
+        try {
+            pemPrivKey = utils::ConvertPrivateKeyToPKCS8(privKey, role, "", chosenPassphrase);
+        } catch (const std::exception& e) {
+            return Error("Failed to convert private key to PKCS8: " + std::string(e.what()));
+        }
+        
+        // 5. 生成文件名 (对应Go版本的strings.Join逻辑)
+        // privFileName := strings.Join([]string{outFile, "key"}, "-")
+        // privFile := strings.Join([]string{privFileName, "pem"}, ".")
+        // pubFile := strings.Join([]string{outFile, "pem"}, ".")
+        std::string privFileName = outFile + "-key";
+                 std::string privFile = privFileName + ".pem";
+         std::string pubFile = outFile + ".pem";
+         
+         // 6. 写入私钥文件 (对应Go版本的ioutil.WriteFile(privFile, pemPrivKey, notary.PrivNoExecPerms))
+         try {
+                          std::ofstream privFileStream(privFile, std::ios::binary);
+             if (!privFileStream) {
+                 return Error("Failed to create private key file: " + privFile);
+             }
+             privFileStream.write(pemPrivKey.c_str(), pemPrivKey.size());
+             privFileStream.close();
+             
+             // 设置文件权限为600 (只有所有者可读写)
+#ifndef _WIN32
+             if (chmod(privFile.c_str(), S_IRUSR | S_IWUSR) != 0) {
+                 utils::GetLogger().Warn("Failed to set private key file permissions");
+             }
+#endif
+        } catch (const std::exception& e) {
+            return Error("Failed to write private key file: " + std::string(e.what()));
+        }
+        
+        // 6. 创建公钥PEM格式 (对应Go版本的pem.Block)
+        // 获取公钥字节数据 (对应Go版本的pubKey.Public())
+        auto publicBytes = pubKey->Public();
+        
+        // 创建PEM Block结构 (对应Go版本的pem.Block)
+        // Type: "PUBLIC KEY"
+        // Headers: map[string]string{"role": role}
+        // Bytes: pubKey.Public()
+        std::string publicPEM = "-----BEGIN PUBLIC KEY-----\n";
+        
+        // 添加角色头部信息 (对应Go版本的Headers: map[string]string{"role": role})
+        if (!role.empty()) {
+            publicPEM += "role: " + role + "\n";
+        }
+        publicPEM += "\n";
+        
+        // 将公钥字节数据进行Base64编码并添加到PEM中
+        std::string base64Data = utils::Base64Encode(publicBytes);
+        
+        // 按64字符一行分割Base64数据
+        size_t pos = 0;
+        while (pos < base64Data.length()) {
+            size_t lineLen = std::min(size_t(64), base64Data.length() - pos);
+            publicPEM += base64Data.substr(pos, lineLen) + "\n";
+            pos += lineLen;
+        }
+                 
+         publicPEM += "-----END PUBLIC KEY-----\n";
+         
+         // 7. 写入公钥文件 (对应Go版本的ioutil.WriteFile(pubFile, pem.EncodeToMemory(&pubPEM), notary.PrivNoExecPerms))
+         try {
+             std::ofstream pubFileStream(pubFile, std::ios::binary);
+             if (!pubFileStream) {
+                 return Error("Failed to create public key file: " + pubFile);
+             }
+             pubFileStream.write(publicPEM.c_str(), publicPEM.size());
+             pubFileStream.close();
+             
+             // 设置文件权限为644 (所有者可读写，其他人只读)
+#ifndef _WIN32
+             if (chmod(pubFile.c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) != 0) {
+                 utils::GetLogger().Warn("Failed to set public key file permissions");
+             }
+#endif
+        } catch (const std::exception& e) {
+            return Error("Failed to write public key file: " + std::string(e.what()));
+        }
+        
+
+        
+                 std::cout << "Generated new " << algorithm << " " << role 
+                  << " key with keyID: " << pubKey->ID() << std::endl;
+         std::cout << "Private key saved to: " << privFile << std::endl;
+         std::cout << "Public key saved to: " << pubFile << std::endl;
+        
+        return Error(); // 成功
+        
+    } catch (const std::exception& e) {
+        return Error("Failed to generate key to file: " + std::string(e.what()));
+    }
 }
 
 // 加载自定义数据
@@ -1041,9 +1206,19 @@ int main(int argc, char** argv) {
     // ======================== key 命令组 ========================
     auto key = app.add_subcommand("key", "Manage signing keys");
     auto keysList = key->add_subcommand("list", "List all signing keys");
+    auto keyGenerate = key->add_subcommand("generate", "Generate a new signing key");
     auto keyRemove = key->add_subcommand("remove", "Remove a signing key");
     auto keyPasswd = key->add_subcommand("passwd", "Change the passphrase for a signing key");
     auto keyRotate = key->add_subcommand("rotate", "Rotate a key for a repository and role");
+    
+    // key generate 参数定义 - 对应Go版本的keysGenerate函数参数
+    std::string generateAlgorithm = "ecdsa";  // 默认算法
+    std::string generateRole = "root";        // 默认角色
+    std::string generateOutFile;              // 输出文件路径
+    
+    keyGenerate->add_option("algorithm", generateAlgorithm, "Key algorithm (ecdsa)")->expected(0, 1);
+    keyGenerate->add_option("-r,--role", generateRole, "Role for the key (default: root)");
+    keyGenerate->add_option("-o,--output", generateOutFile, "Output file path for key (without extension)");
     
     // key rotate 参数定义 - 对应Go版本的keysRotate函数参数
     std::string rotateGUN;
@@ -1055,6 +1230,78 @@ int main(int argc, char** argv) {
     keyRotate->add_option("role", rotateRole, "Role to rotate key for (root, targets, snapshot, timestamp)")->required();
     keyRotate->add_flag("--server-managed", serverManaged, "Use server-managed key rotation");
     keyRotate->add_option("--key-file", keyFiles, "Key file(s) to import for rotation (can be used multiple times)");
+    
+    keyGenerate->callback([&]() {
+        try {
+            // 1. 验证算法参数 (对应Go版本的参数检查)
+            std::transform(generateAlgorithm.begin(), generateAlgorithm.end(), 
+                          generateAlgorithm.begin(), ::tolower);
+            
+            if (generateAlgorithm != "ecdsa") {
+                utils::GetLogger().Error("Algorithm not allowed, possible values are: ECDSA");
+                return;
+            }
+            
+            // 2. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Generating key", utils::LogContext()
+                    .With("algorithm", generateAlgorithm)
+                    .With("role", generateRole)
+                    .With("outFile", generateOutFile.empty() ? "none" : generateOutFile));
+            }
+            
+            // 3. 如果没有输出文件，使用密钥存储 (对应Go版本的k.outFile == "")
+            if (generateOutFile.empty()) {
+                // 创建密码获取器和密钥存储
+                auto passRetriever = passphrase::PromptRetriever();
+                auto keyStores = getKeyStores(trustDir, passRetriever, true, true);
+                
+                if (keyStores.empty()) {
+                    utils::GetLogger().Error("Failed to create key stores");
+                    return;
+                }
+                
+                // 创建CryptoService并添加密钥存储
+                crypto::CryptoService cryptoService;
+                for (auto& store : keyStores) {
+                    cryptoService.AddKeyStore(std::shared_ptr<storage::GenericKeyStore>(std::move(store)));
+                }
+                
+                // 生成密钥并存储到密钥存储中 (对应Go版本的cs.Create)
+                auto pubKeyResult = cryptoService.Create(stringToRole(generateRole), "", generateAlgorithm);
+                if (!pubKeyResult.ok()) {
+                    utils::GetLogger().Error("Failed to create a new " + generateRole + " key: " + 
+                                           pubKeyResult.error().what());
+                    return;
+                }
+                
+                auto pubKey = pubKeyResult.value();
+                std::cout << "Generated new " << generateAlgorithm << " " << generateRole 
+                         << " key with keyID: " << pubKey->ID() << std::endl;
+                
+            } else {
+                // 4. 生成密钥到文件 (对应Go版本的generateKeyToFile调用)
+                auto passRetriever = passphrase::PromptRetriever();
+                auto generateErr = generateKeyToFile(generateRole, generateAlgorithm, passRetriever, generateOutFile);
+                if (generateErr.hasError()) {
+                    utils::GetLogger().Error("Failed to generate key to file: " + generateErr.what());
+                    return;
+                }
+                
+                utils::GetLogger().Info("Successfully generated key pair to files");
+            }
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
     
     keysList->callback([&]() {
         try {

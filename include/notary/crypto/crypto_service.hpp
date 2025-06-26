@@ -64,14 +64,15 @@ public:
         return std::make_shared<CryptoService>(keyStores);
     }
 
+    // 生成私钥（对应Go版本的tufutils.GenerateKey）
+    Result<std::shared_ptr<PrivateKey>> GeneratePrivateKey(const std::string& algorithm);
+
 private:
     // 生成密钥对
     struct KeyPair {
         std::shared_ptr<PublicKey> publicKey;
         std::shared_ptr<PrivateKey> privateKey;
     };
-    Result<std::shared_ptr<PrivateKey>> generatePrivateKey(const std::string& algorithm);
-    
 private:
     std::vector<std::shared_ptr<storage::GenericKeyStore>> keyStores_;
 };

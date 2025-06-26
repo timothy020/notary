@@ -73,7 +73,7 @@ Result<std::shared_ptr<PublicKey>> CryptoService::Create(RoleName role,
     }
     
     // 生成密钥对
-    auto privateKeyResult = generatePrivateKey(algorithm);
+    auto privateKeyResult = GeneratePrivateKey(algorithm);
     if (!privateKeyResult.ok()) {
         return Result<std::shared_ptr<PublicKey>>(privateKeyResult.error());
     }
@@ -191,7 +191,7 @@ std::map<std::string, RoleName> CryptoService::ListAllKeys() {
     return result;
 }
 
-Result<std::shared_ptr<PrivateKey>> CryptoService::generatePrivateKey(const std::string& algorithm) {
+Result<std::shared_ptr<PrivateKey>> CryptoService::GeneratePrivateKey(const std::string& algorithm) {
     if (algorithm == ECDSA_KEY) {
             // 创建 EC_KEY 对象
             std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)> ecKey(
