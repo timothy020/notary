@@ -1,5 +1,10 @@
 #include "notary/utils/helpers.hpp"
 #include "notary/tuf/repo.hpp"
+#include "notary/crypto/keys.hpp"
+#include "notary/utils/tools.hpp"
+#include <openssl/evp.h>
+#include <openssl/ec.h>
+#include <openssl/pem.h>
 
 namespace notary {
 namespace utils {
@@ -258,90 +263,28 @@ Error applyRootRoleChange(std::shared_ptr<tuf::Repo> repo,
     
     try {
         if (action == changelist::ActionCreate) {
-            // 解析TUFRootData (对应Go的json.Unmarshal(c.Content(), d))
-            const auto& contentBytes = change->Content();
-            std::string contentStr(contentBytes.begin(), contentBytes.end());
-            nlohmann::json rootDataJson = nlohmann::json::parse(contentStr);
-            
-            // 解析角色名 (对应Go的d.RoleName)
-            if (!rootDataJson.contains("role") && !rootDataJson.contains("roleName")) {
-                return Error("Missing role name in TUFRootData");
+            // 解析TUFRootData - 直接使用changelist模块的TUFRootData反序列化
+            // (对应Go的json.Unmarshal(c.Content(), &d))
+            changelist::TUFRootData d;
+            auto deserializeErr = d.Deserialize(change->Content());
+            if (!deserializeErr.ok()) {
+                return Error("Failed to deserialize TUFRootData: " + deserializeErr.what());
             }
             
-            // 解析角色名和密钥列表 对应GO json.Unmarshal(c.Content(), d)
-            std::string roleNameStr;
-            std::vector<std::shared_ptr<crypto::PublicKey>> keys;
-            if (rootDataJson.contains("role")) {
-                roleNameStr = rootDataJson["role"];
-            } else {
-                roleNameStr = rootDataJson["roleName"];
-            }
-            
-            RoleName roleName = stringToRole(roleNameStr);
             utils::GetLogger().Info("Applying root role change", utils::LogContext()
-                .With("role", roleNameStr));
+                .With("role", roleToString(d.roleName))
+                .With("keyCount", std::to_string(d.keys.size())));
             
-            // 解析密钥列表 (对应Go的d.Keys)
-            if (!rootDataJson.contains("keys")) {
-                return Error("Missing keys in TUFRootData");
-            }
-            
-            const auto& keysJson = rootDataJson["keys"];
-            
-            if (keysJson.is_array()) {
-                for (const auto& keyJson : keysJson) {
-                    try {
-                        // 解析密钥信息
-                        std::string keyType;
-                        std::vector<uint8_t> publicData;
-                        
-                        if (keyJson.contains("algorithm")) {
-                            keyType = keyJson["algorithm"];
-                        } else {
-                            utils::GetLogger().Warn("Key missing algorithm/keytype field, skipping");
-                            continue;
-                        }
-                        
-                        if (keyJson.contains("public")) {
-                            std::string publicStr = keyJson["public"];
-                            publicData = std::vector<uint8_t>(publicStr.begin(), publicStr.end());
-                        } else {
-                            utils::GetLogger().Warn("Key missing public data, skipping");
-                            continue;
-                        }
-                        
-                        // 创建公钥对象
-                        auto publicKey = crypto::NewPublicKey(keyType, publicData);
-                        if (publicKey) {
-                            keys.push_back(publicKey);
-                        } else {
-                            utils::GetLogger().Warn("Failed to create public key", utils::LogContext()
-                                .With("keyType", keyType));
-                        }
-                        
-                    } catch (const std::exception& e) {
-                        utils::GetLogger().Warn("Error parsing key", utils::LogContext()
-                            .With("error", e.what()));
-                        continue;
-                    }
-                }
-            } else {
-                return Error("Keys field must be an array");
-            }
-            
-            if (keys.empty()) {
-                return Error("No valid keys found in TUFRootData");
-            }
-            
-            // 调用repo的ReplaceBaseKeys方法 (对应Go的repo.ReplaceBaseKeys(d.RoleName, d.Keys...))
-            auto err = repo->ReplaceBaseKeys(roleName, keys);
+            // 直接调用repo的ReplaceBaseKeys方法 
+            // (对应Go的return repo.ReplaceBaseKeys(d.RoleName, d.Keys...))
+            auto err = repo->ReplaceBaseKeys(d.roleName, d.keys);
             if (!err.ok()) {
-                return Error("Failed to replace base keys for role " + roleNameStr + ": " + err.what());
+                return Error("Failed to replace base keys for role " + roleToString(d.roleName) + ": " + err.what());
             }
             
             utils::GetLogger().Debug("Successfully replaced base keys", utils::LogContext()
-                .With("role", roleNameStr)
-                .With("keyCount", std::to_string(keys.size())));
+                .With("role", roleToString(d.roleName))
+                .With("keyCount", std::to_string(d.keys.size())));
             
             return Error(); // 成功
             
@@ -486,6 +429,69 @@ void warnRolesNearExpiry(const std::shared_ptr<tuf::Repo>& repo) {
     } catch (const std::exception& e) {
         utils::GetLogger().Error("Failed to check role expiry", 
             utils::LogContext().With("error", e.what()));
+    }
+}
+
+// rotateRemoteKey函数实现 - 对应Go版本的rotateRemoteKey函数
+// 在远程存储中轮转私钥并返回公钥组件
+Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(RoleName role, 
+                                                          std::shared_ptr<storage::RemoteStore> remoteStore,
+                                                          const std::string& gun) {
+    try {
+        if (!remoteStore) {
+            return Error("Remote store not initialized");
+        }
+        
+        utils::GetLogger().Info("Requesting remote key rotation", 
+            utils::LogContext()
+                .With("role", roleToString(role))
+                .With("gun", gun));
+        
+        // 发送密钥轮转请求到远程服务器 (对应Go的rawPubKey, err := remote.RotateKey(role))
+        // 首先尝试将RemoteStore转换为HttpStore以访问RotateKey方法
+        auto httpStore = dynamic_cast<storage::HttpStore*>(remoteStore.get());
+        if (!httpStore) {
+            return Error("Remote store is not an HttpStore, cannot rotate key");
+        }
+        
+        // 将角色名转换为字符串
+        std::string roleStr = roleToString(role);
+        auto rawPubKeyResult = httpStore->RotateKey(roleStr);
+        if (!rawPubKeyResult.ok()) {
+            return Error("Failed to rotate remote key for role " + roleStr + ": " + rawPubKeyResult.error().what());
+        }
+        
+        // 获取原始公钥字节数据 (对应Go的rawPubKey)
+        auto rawPubKey = rawPubKeyResult.value();
+        
+        utils::GetLogger().Debug("Received raw public key from server", 
+            utils::LogContext()
+                .With("role", roleToString(role))
+                .With("dataSize", std::to_string(rawPubKey.size())));
+        
+        // 使用UnmarshalPublicKey解析公钥数据 (对应Go的pubKey, err := data.UnmarshalPublicKey(rawPubKey))
+        auto pubKeyResult = crypto::UnmarshalPublicKey(rawPubKey);
+        if (!pubKeyResult.ok()) {
+            return Error("Failed to unmarshal public key: " + pubKeyResult.error().what());
+        }
+        
+        auto pubKey = pubKeyResult.value();
+        if (!pubKey) {
+            return Error("Unmarshaled public key is null");
+        }
+        
+        utils::GetLogger().Info("Successfully rotated remote key", 
+            utils::LogContext()
+                .With("role", roleToString(role))
+                .With("newKeyID", pubKey->ID())
+                .With("algorithm", pubKey->Algorithm())
+                .With("gun", gun));
+        
+        // 返回公钥 (对应Go的return pubKey, nil)
+        return pubKey;
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Exception in rotateRemoteKey: ") + e.what());
     }
 }
 

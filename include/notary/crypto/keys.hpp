@@ -104,6 +104,20 @@ public:
         : TUFKey(RSA_X509_KEY, x509Data, std::vector<uint8_t>()) {}
 };
 
+// ED25519PublicKey represents an ED25519 key
+class ED25519PublicKey : public TUFKey {
+public:
+    ED25519PublicKey(const std::vector<uint8_t>& publicKey)
+        : TUFKey(ED25519_KEY, publicKey, std::vector<uint8_t>()) {}
+};
+
+// UnknownPublicKey represents a key with an unknown or unsupported algorithm
+class UnknownPublicKey : public TUFKey {
+public:
+    UnknownPublicKey(const std::string& algorithm, const std::vector<uint8_t>& publicKey)
+        : TUFKey(algorithm, publicKey, std::vector<uint8_t>()) {}
+};
+
 // ECDAPrivateKey is a private key for ECDSA
 class ECDSAPrivateKey : public PrivateKey {  // PrivateKey继承自PublicKey
 public:
@@ -142,6 +156,15 @@ std::shared_ptr<RSAPublicKey> NewRSAPublicKey(const std::vector<uint8_t>& public
 // 工厂函数：创建x509公钥
 std::shared_ptr<PublicKey> NewRSAx509PublicKey(const std::vector<uint8_t>& x509Data);
 std::shared_ptr<PublicKey> NewECDSAx509PublicKey(const std::vector<uint8_t>& x509Data);
+
+// typedPublicKey函数声明 - 对应Go版本的typedPublicKey函数
+// 根据TUFKey的算法类型创建相应的具体公钥类型实例
+std::shared_ptr<PublicKey> typedPublicKey(const TUFKey& tk);
+
+// UnmarshalPublicKey函数声明 - 对应Go版本的UnmarshalPublicKey函数
+// 用于解析JSON数据中的单个公钥
+Result<std::shared_ptr<PublicKey>> UnmarshalPublicKey(const std::vector<uint8_t>& data);
+Result<std::shared_ptr<PublicKey>> UnmarshalPublicKey(const std::string& jsonData);
 
 } // namespace crypto
 } // namespace notary

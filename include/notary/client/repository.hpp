@@ -90,8 +90,18 @@ public:
 
     // 删除信任数据 (对应Go的DeleteTrustData)
     static Error DeleteTrustData(const std::string& baseDir, const GUN& gun, 
-                                const std::string& serverURL = "", 
-                                bool deleteRemote = false);
+                                 const std::string& serverURL = "", 
+                                 bool deleteRemote = false);
+
+    // 密钥轮转操作 (对应Go的RotateKey)
+    // 移除角色关联的所有现有密钥。如果keyList中没有指定密钥，则创建并添加一个新密钥或委托服务器管理密钥。
+    // 如果keyList指定了密钥，则使用这些密钥来签名角色。
+    // 这些更改暂存在changelist中，直到调用publish为止。
+    Error RotateKey(RoleName role, bool serverManagesKey, const std::vector<std::string>& keyList = {});
+
+    // 发布方法 (对应Go的publish方法)
+    // 使用提供的changelist发布变更到远程服务器  
+    Error publish(std::shared_ptr<changelist::Changelist> cl);
 
 private:
 
@@ -123,6 +133,23 @@ private:
     // 验证私钥（通过其ID表示）和公钥形成匹配的密钥对
     Error matchKeyIdsWithPubKeys(const std::vector<std::string>& ids, 
                                 const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys);
+
+    // pubKeyListForRotation函数声明 - 对应Go版本的pubKeyListForRotation函数
+    // 给定一组新密钥和要轮转的角色，返回要使用的当前密钥列表
+    Result<std::vector<std::shared_ptr<crypto::PublicKey>>> pubKeyListForRotation(
+        RoleName role, bool serverManaged, const std::vector<std::string>& newKeys);
+
+
+
+    // pubKeysToCerts函数声明 - 对应Go版本的pubKeysToCerts函数
+    // 将公钥转换为证书（对于根密钥）
+    Result<std::vector<std::shared_ptr<crypto::PublicKey>>> pubKeysToCerts(
+        RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys);
+
+    // rootFileKeyChange函数声明 - 对应Go版本的rootFileKeyChange函数
+    // 为根文件创建密钥变更
+    Error rootFileKeyChange(std::shared_ptr<changelist::Changelist> cl, RoleName role, 
+                           const std::string& action, const std::vector<std::shared_ptr<crypto::PublicKey>>& keyList);
 
 
 private:

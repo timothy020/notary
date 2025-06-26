@@ -375,6 +375,74 @@ Error HttpStore::RemoveAll() {
     return translateStatusToError(httpCode, "DELETE metadata for GUN endpoint");
 }
 
+// RotateKey - 对应Go版本的rotateKey方法
+// 请求服务器轮转指定角色的密钥
+Result<std::vector<uint8_t>> HttpStore::RotateKey(const std::string& role) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return Result<std::vector<uint8_t>>(Error("Failed to initialize CURL"));
+    }
+    
+    // 构建轮转密钥的URL - 类似于buildKeyURL但是用于轮转
+    // 例："http://localhost:4443/v2/docker.io/library/myapp/_trust/tuf/timestamp.key/rotate"
+    std::string url = buildKeyURL(role) + "/rotate";
+    
+    // 设置CURL选项为POST请求来请求密钥轮转
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L); // 设置为POST请求
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L); // 启用SSL验证
+    
+    // 设置空的POST数据（只需要POST请求即可触发轮转）
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
+    
+    // 接收数据的字符串
+    std::string responseBuffer;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBuffer);
+    
+    // 执行请求
+    CURLcode res = curl_easy_perform(curl);
+    
+    // 检查请求是否成功
+    if (res != CURLE_OK) {
+        std::string errorMsg = curl_easy_strerror(res);
+        curl_easy_cleanup(curl);
+        return Result<std::vector<uint8_t>>(Error("CURL key rotation request failed: " + errorMsg));
+    }
+    
+    // 获取HTTP状态码
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);    
+    curl_easy_cleanup(curl);
+
+    // 处理HTTP状态码
+    Error httpError = translateStatusToError(httpCode, role + " key rotation");
+    if (!httpError.ok()) {
+        return Result<std::vector<uint8_t>>(httpError);
+    }
+    
+    // 验证响应是否为有效JSON格式，并转换为uint8_t vector
+    try {
+        // 解析JSON以验证格式正确性
+        json responseJson = json::parse(responseBuffer);
+        
+        // 验证响应格式 - 应该包含新的密钥信息
+        if (!responseJson.contains("keyval") || !responseJson["keyval"].contains("public")) {
+            return Result<std::vector<uint8_t>>(Error("Invalid key rotation response format"));
+        }
+        
+        // 重新序列化以确保格式一致性
+        std::string formattedJsonStr = responseJson.dump();
+        std::vector<uint8_t> result(formattedJsonStr.begin(), formattedJsonStr.end());
+        return Result<std::vector<uint8_t>>(std::move(result));
+        
+    } catch (const json::exception& e) {
+        return Result<std::vector<uint8_t>>(Error("Failed to parse JSON key rotation response: " + std::string(e.what())));
+    }
+}
+
 // ListFiles - HttpStore不支持列出文件，返回空列表
 std::vector<std::string> HttpStore::ListFiles() {
     // HTTP存储不支持列出文件操作

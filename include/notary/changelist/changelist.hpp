@@ -120,6 +120,7 @@ struct TUFRootData {
     RoleName roleName;
     std::vector<std::shared_ptr<crypto::PublicKey>> keys;
     std::vector<uint8_t> Serialize() const;
+    Error Deserialize(const std::vector<uint8_t>& data);
 };
 
 // FileChangelist - 基于文件系统的Changelist实现
@@ -137,6 +138,36 @@ public:
     Error Close() override;
     std::unique_ptr<ChangeIterator> NewIterator() override;
     std::string Location() const override { return dir_; }
+};
+
+// MemoryChangeListIterator - 内存changelist的迭代器实现
+class MemoryChangeListIterator : public ChangeIterator {
+private:
+    std::vector<std::shared_ptr<Change>> changes_;
+    size_t currentIndex_;
+
+public:
+    explicit MemoryChangeListIterator(const std::vector<std::shared_ptr<Change>>& changes);
+    
+    std::shared_ptr<Change> Next() override;
+    bool HasNext() const override;
+};
+
+// MemoryChangelist - 基于内存的Changelist实现 (对应Go的NewMemChangelist)
+class MemoryChangelist : public Changelist {
+private:
+    std::vector<std::shared_ptr<Change>> changes_;
+
+public:
+    MemoryChangelist() = default;
+    
+    std::vector<std::shared_ptr<Change>> List() const override;
+    Error Add(const std::shared_ptr<Change>& change) override;
+    Error Clear(const std::string& archive) override;
+    Error Remove(const std::vector<int>& idxs) override;
+    Error Close() override;
+    std::unique_ptr<ChangeIterator> NewIterator() override;
+    std::string Location() const override { return "memory"; }
 };
 
 

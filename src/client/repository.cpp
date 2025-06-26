@@ -49,6 +49,38 @@ bool isRootRole(RoleName role) {
     return role == RoleName::RootRole;
 }
 
+// checkRotationInput函数实现 - 对应Go版本的checkRotationInput函数
+// 验证密钥轮转的输入参数是否有效
+Error checkRotationInput(RoleName role, bool serverManaged) {
+    // 检查是否是有效的角色
+    if (role != RoleName::RootRole && role != RoleName::TargetsRole && 
+        role != RoleName::SnapshotRole && role != RoleName::TimestampRole) {
+        return Error("Notary does not currently permit rotating the " + roleToString(role) + " key");
+    }
+    
+    // 检查是否是委托角色
+    if (tuf::IsDelegation(role)) {
+        return Error("Notary does not currently permit rotating the " + roleToString(role) + " key");
+    }
+    
+    // 目前支持远程管理的角色：timestamp和snapshot
+    bool canBeRemoteKey = (role == RoleName::TimestampRole || role == RoleName::SnapshotRole);
+    
+    // 目前支持本地管理的角色：root、targets和snapshot  
+    bool canBeLocalKey = (role == RoleName::RootRole || role == RoleName::TargetsRole || 
+                         role == RoleName::SnapshotRole);
+    
+    if (serverManaged && !canBeRemoteKey) {
+        return Error("Invalid remote role: " + roleToString(role) + " cannot be server managed");
+    }
+    
+    if (!serverManaged && !canBeLocalKey) {
+        return Error("Invalid local role: " + roleToString(role) + " must be server managed");
+    }
+    
+    return Error(); // 成功
+}
+
 // addChange函数实现 (对应Go的addChange函数)
 Error addChange(std::shared_ptr<changelist::Changelist> cl, 
                std::shared_ptr<changelist::Change> c, 
@@ -94,6 +126,7 @@ Error addChange(std::shared_ptr<changelist::Changelist> cl,
     
     return Error(); // 成功
 }
+
 } // namespace
 
 
@@ -560,137 +593,17 @@ Error Repository::applyChangelist() {
 }
 
 Error Repository::Publish() {
-    try {
-        bool initialPublish = false;
-        
-        // 更新TUF元数据 (对应Go的r.updateTUF(true))
-        auto err = updateTUF(true);
-        if (!err.ok()) {
-            // 检查是否是仓库不存在的错误 (对应Go的ErrRepositoryNotExist检查)
-            if (std::string(err.what()).find("does not exist") != std::string::npos) {
-                
-                // 尝试从本地缓存加载 (对应Go的r.bootstrapRepo())
-                utils::GetLogger().Info("尝试从本地缓存加载", utils::LogContext().With("gun", gun_.empty() ? "default" : gun_));
-                err = bootstrapRepo();
-                if (!err.ok() && (std::string(err.what()).find("Metadata not found") != std::string::npos ||
-                                 std::string(err.what()).find("not found") != std::string::npos)) {
-                    
-                    utils::GetLogger().Info("No TUF data found locally or remotely - initializing repository for the first time",
-                        utils::LogContext().With("gun", gun_.empty() ? "default" : gun_));
-                    
-                    // 初始化仓库 (对应Go的r.Initialize(nil))
-                    err = Initialize({});
-                }
-                
-                if (!err.ok()) {
-                    utils::GetLogger().Debug("Unable to load or initialize repository during first publish",
-                        utils::LogContext().With("error", err.what()));
-                    return err;
-                }
-                
-                // 标记为首次发布 (对应Go的initialPublish = true)
-                initialPublish = true;
-            } else {
-                // 无法更新，因此无法发布 (对应Go的"We could not update, so we cannot publish")
-                utils::GetLogger().Error("Could not publish Repository since we could not update",
-                    utils::LogContext().With("error", err.what()));
-                return err;
-            }
-        }
-
-        // 应用changelist到repo (对应Go的applyChangelist(r.tufRepo, r.invalid, cl))
-        err = utils::applyChangelist(tufRepo_, invalidRepo_, changelist_);
-        if (!err.ok()) {
-            utils::GetLogger().Debug("Error applying changelist");
-            return err;
-        }
-        
-        // 准备需要更新的TUF文件 (对应Go的updatedFiles := make(map[data.RoleName][]byte))
-        std::map<std::string, std::vector<uint8_t>> updatedFiles;
-        
-        // 检查并签署Root文件 (对应Go的signRootIfNecessary)
-        err = signRootIfNecessary(updatedFiles, initialPublish);
-        if (!err.ok()) {
-            return err;
-        }
-        
-        // 签署Targets文件 (对应Go的signTargets)
-        err = signTargets(updatedFiles, initialPublish);
-        if (!err.ok()) {
-            return err;
-        }
-        
-        // 处理Snapshot文件 (对应Go的snapshot处理逻辑)
-        if (!tufRepo_ || !tufRepo_->GetSnapshot()) {
-            // 如果没有snapshot文件，尝试初始化 (对应Go的r.tufRepo.InitSnapshot())
-            if (tufRepo_) {
-                auto initResult = tufRepo_->InitSnapshot();
-                if (!initResult.ok()) {
-                    return Error("Failed to initialize snapshot: " + initResult.error().what());
-                }
-            }
-        }
-        
-        // 尝试序列化并签署snapshot (对应Go的serializeCanonicalRole)
-        if (tufRepo_) {
-            auto snapshotResult = utils::serializeCanonicalRole(tufRepo_, RoleName::SnapshotRole, {});
-            if (!snapshotResult.empty()) {
-                // 成功签署snapshot
-                updatedFiles["snapshot"] = snapshotResult;
-            } else {
-                // 签署失败，假设服务器会签署 (对应Go的"Assuming that server should sign the snapshot")
-                utils::GetLogger().Debug("Client does not have the key to sign snapshot. "
-                    "Assuming that server should sign the snapshot.");
-            }
-        }
-        
-        // 推送更新到远程服务器 (对应Go的remote.SetMulti)
-        if (remoteStore_) {
-            // 准备批量上传的元数据map - 对应Go版本的SetMulti
-            // 需要验证和格式化数据，确保发送到服务器的是有效的JSON
-            std::map<std::string, std::vector<uint8_t>> metasToUpload;
-            
-            for (const auto& [roleName, data] : updatedFiles) {
-                // 验证vector<uint8_t>是否包含有效的JSON数据
-                try {
-                    std::string jsonStr(data.begin(), data.end());
-                    json jsonData = json::parse(jsonStr);
-                    
-                    // 重新序列化以确保格式正确性（去除多余空格等）
-                    std::string formattedJsonStr = jsonData.dump();
-                    std::vector<uint8_t> formattedData(formattedJsonStr.begin(), formattedJsonStr.end());
-                    
-                    metasToUpload[roleName] = formattedData;
-                    
-                } catch (const json::exception& e) {
-                    return Error("Failed to parse metadata JSON for " + roleName + ": " + e.what());
-                }
-            }
-            
-            // 使用SetMulti一次性上传所有元数据，保持服务器一致性
-            err = remoteStore_->SetMulti(metasToUpload);
-            if (!err.ok()) {
-                return Error("Failed to publish metadata using SetMulti: " + err.what());
-            }
-            
-            utils::GetLogger().Info("成功批量发布元数据", 
-                utils::LogContext()
-                    .With("gun", gun_.empty() ? "default" : gun_)
-                    .With("files_count", std::to_string(metasToUpload.size())));
-        }
-        
-        // 清除changelist (对应Go的r.changelist.Clear(""))
-        err = changelist_->Clear("");
-        if (!err.ok()) {
-            // 这不是关键问题，但会导致奇怪的行为 (对应Go的警告日志)
-            utils::GetLogger().Warn("Unable to clear changelist. You may want to manually delete the folder",
-                utils::LogContext().With("location", changelist_->Location()));
-        }
-        
-        return Error(); // 成功
-    } catch (const std::exception& e) {
-        return Error(std::string("Failed to publish: ") + e.what());
+    Error err = publish(changelist_);
+    if (!err.ok()) {
+        return err;
     }
+    // 清除changelist (对应Go的r.changelist.Clear(""))
+    err = changelist_->Clear("");
+    if (!err.ok()) {
+        utils::GetLogger().Warn("Unable to clear changelist. You may want to manually delete the folder",
+            utils::LogContext().With("location", changelist_->Location()));
+    }
+    return Error();
 }
 
 
@@ -720,6 +633,7 @@ Error Repository::signRootIfNecessary(std::map<std::string, std::vector<uint8_t>
         
         if (needsUpdate) {
             // 序列化并签署root (对应Go的serializeCanonicalRole)
+            utils::GetLogger().Info("signRootIfNecessary");
             auto rootJSON = utils::serializeCanonicalRole(tufRepo_, RoleName::RootRole, {});
             if (rootJSON.empty()) {
                 return Error("Failed to serialize root metadata");
@@ -1298,6 +1212,374 @@ Result<std::vector<std::shared_ptr<crypto::PublicKey>>> Repository::publicKeysOf
         
     } catch (const std::exception& e) {
         return Error(std::string("Exception in publicKeysOfKeyIDs: ") + e.what());
+    }
+}
+
+// pubKeyListForRotation函数实现 - 对应Go版本的pubKeyListForRotation函数
+// 给定一组新密钥和要轮转的角色，返回要使用的当前密钥列表
+Result<std::vector<std::shared_ptr<crypto::PublicKey>>> Repository::pubKeyListForRotation(
+    RoleName role, bool serverManaged, const std::vector<std::string>& newKeys) {
+    
+    try {
+        std::vector<std::shared_ptr<crypto::PublicKey>> pubKeyList;
+        
+        // 如果服务器管理要轮转的密钥，请求轮转并返回新密钥 (对应Go的if serverManaged)
+        if (serverManaged) {
+            utils::GetLogger().Debug("Rotating server-managed key", 
+                utils::LogContext()
+                    .With("role", roleToString(role))
+                    .With("gun", gun_));
+            
+            // 请求远程密钥轮转 (对应Go的rotateRemoteKey(role, remote))
+            auto pubKeyResult = utils::rotateRemoteKey(role, remoteStore_, gun_);
+            if (!pubKeyResult.ok()) {
+                return Error("Unable to rotate remote key: " + pubKeyResult.error().what());
+            }
+            
+            auto pubKey = pubKeyResult.value();
+            pubKeyList.reserve(1);
+            pubKeyList.push_back(pubKey);
+            
+            utils::GetLogger().Info("Successfully rotated server-managed key", 
+                utils::LogContext()
+                    .With("role", roleToString(role))
+                    .With("keyID", pubKey->ID()));
+            
+            return pubKeyList;
+        }
+        
+        // 如果没有传入新密钥，我们生成一个 (对应Go的if len(newKeys) == 0)
+        if (newKeys.empty()) {
+            utils::GetLogger().Debug("Generating new key for rotation", 
+                utils::LogContext()
+                    .With("role", roleToString(role))
+                    .With("gun", gun_));
+            
+            pubKeyList.reserve(1);
+            auto pubKeyResult = cryptoService_->Create(role, gun_, ECDSA_KEY);
+            if (!pubKeyResult.ok()) {
+                return Error("Unable to generate key: " + pubKeyResult.error().what());
+            }
+            
+            auto pubKey = pubKeyResult.value();
+            pubKeyList.push_back(pubKey);
+            
+            utils::GetLogger().Info("Successfully generated new key for rotation", 
+                utils::LogContext()
+                    .With("role", roleToString(role))
+                    .With("keyID", pubKey->ID()));
+        }
+        
+        // 如果提供了要轮转到的密钥列表，我们添加这些密钥 (对应Go的if len(newKeys) > 0)
+        if (!newKeys.empty()) {
+            utils::GetLogger().Debug("Using provided keys for rotation", 
+                utils::LogContext()
+                    .With("role", roleToString(role))
+                    .With("keyCount", std::to_string(newKeys.size())));
+            
+            pubKeyList.clear(); // 清空之前可能生成的密钥
+            pubKeyList.reserve(newKeys.size());
+            
+            for (const auto& keyID : newKeys) {
+                // 从CryptoService获取密钥 (对应Go的r.GetCryptoService().GetKey(keyID))
+                auto pubKey = cryptoService_->GetKey(keyID);
+                if (!pubKey) {
+                    return Error("Unable to find key: " + keyID);
+                }
+                
+                pubKeyList.push_back(pubKey);
+                
+                utils::GetLogger().Debug("Added key to rotation list", 
+                    utils::LogContext()
+                        .With("keyID", keyID)
+                        .With("algorithm", pubKey->Algorithm()));
+            }
+        }
+        
+        // 转换为证书（对于根密钥） (对应Go的pubKeysToCerts(role, pubKeyList))
+        auto certsResult = pubKeysToCerts(role, pubKeyList);
+        if (!certsResult.ok()) {
+            return Error("Failed to convert public keys to certificates: " + certsResult.error().what());
+        }
+        
+        auto certKeyList = certsResult.value();
+        
+        utils::GetLogger().Info("Successfully prepared key list for rotation", 
+            utils::LogContext()
+                .With("role", roleToString(role))
+                .With("keyCount", std::to_string(certKeyList.size()))
+                .With("serverManaged", serverManaged ? "true" : "false"));
+        
+        return certKeyList;
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Exception in pubKeyListForRotation: ") + e.what());
+    }
+}
+
+
+
+// pubKeysToCerts函数实现 - 对应Go版本的pubKeysToCerts函数
+// 将公钥转换为证书（对于根密钥）
+Result<std::vector<std::shared_ptr<crypto::PublicKey>>> Repository::pubKeysToCerts(
+    RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys) {
+    
+    try {
+        // 如果不是根角色，直接返回原始公钥列表 (对应Go的if role != data.CanonicalRootRole)
+        if (role != RoleName::RootRole) {
+            utils::GetLogger().Debug("Role is not root, returning public keys as-is", 
+                utils::LogContext()
+                    .With("role", roleToString(role))
+                    .With("keyCount", std::to_string(pubKeys.size())));
+            return pubKeys;
+        }
+        
+        utils::GetLogger().Debug("Converting public keys to certificates for root role", 
+            utils::LogContext()
+                .With("keyCount", std::to_string(pubKeys.size())));
+        
+        std::vector<std::shared_ptr<crypto::PublicKey>> certKeys;
+        certKeys.reserve(pubKeys.size());
+        
+        // 遍历每个公钥，为根角色生成对应的证书公钥 (对应Go的for _, pubKey := range pubKeys)
+        for (const auto& pubKey : pubKeys) {
+            if (!pubKey) {
+                return Error("Public key is null in pubKeysToCerts");
+            }
+            
+            // 获取对应的私钥 (对应Go的privKey, _, err := r.GetCryptoService().GetPrivateKey(pubKey.ID()))
+            auto privateKeyResult = cryptoService_->GetPrivateKey(pubKey->ID());
+            if (!privateKeyResult.ok()) {
+                // 找不到私钥直接报错，与Go版本保持一致 (对应Go的if err != nil { return nil, err })
+                return Error("Could not get the private key matching public key ID " + pubKey->ID() + ": " + privateKeyResult.error().what());
+            }
+            
+            auto [privKey, keyRole] = privateKeyResult.value();
+            if (!privKey) {
+                return Error("Retrieved private key is null for ID: " + pubKey->ID());
+            }
+            
+            // 使用rootCertKey函数生成证书公钥 (对应Go的rootCertKey(r.gun, privKey))
+            auto certKey = rootCertKey(gun_.empty() ? "default" : gun_, privKey);
+            if (!certKey) {
+                return Error("Failed to generate certificate key for public key: " + pubKey->ID());
+            }
+            
+            certKeys.push_back(certKey);
+            
+            utils::GetLogger().Debug("Successfully converted public key to certificate key", 
+                utils::LogContext()
+                    .With("originalKeyID", pubKey->ID())
+                    .With("certificateKeyID", certKey->ID()));
+        }
+        
+        utils::GetLogger().Info("Successfully converted public keys to certificates", 
+            utils::LogContext()
+                .With("originalKeyCount", std::to_string(pubKeys.size()))
+                .With("certificateKeyCount", std::to_string(certKeys.size())));
+        
+        return certKeys;
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Exception in pubKeysToCerts: ") + e.what());
+    }
+}
+
+// rootFileKeyChange函数实现 - 对应Go版本的rootFileKeyChange函数 
+// 为根文件创建密钥变更
+Error Repository::rootFileKeyChange(std::shared_ptr<changelist::Changelist> cl, RoleName role, 
+                                   const std::string& action, const std::vector<std::shared_ptr<crypto::PublicKey>>& keyList) {
+    try {
+        // 创建TUFRootData元数据 (对应Go的meta := changelist.TUFRootData{RoleName: role, Keys: keyList})
+        changelist::TUFRootData meta;
+        meta.roleName = role;
+        meta.keys = keyList;
+        
+        // 序列化元数据为JSON (对应Go的metaJSON, err := json.Marshal(meta))
+        auto metaJSON = meta.Serialize();
+        if (metaJSON.empty()) {
+            return Error("Failed to serialize TUFRootData for role: " + roleToString(role));
+        }
+        
+        // 创建TUF变更对象 (对应Go的changelist.NewTUFChange)
+        auto change = std::make_shared<changelist::TUFChange>(
+            action,                          // action
+            changelist::ScopeRoot,          // scope = "root"
+            changelist::TypeBaseRole,       // type = "role"
+            roleToString(role),             // path = role.String()
+            metaJSON                        // content = metaJSON
+        );
+        
+        // 将变更添加到changelist中 (对应Go的return cl.Add(c))
+        return cl->Add(change);
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to create root file key change: ") + e.what());
+    }
+}
+
+// RotateKey函数实现 - 对应Go版本的RotateKey函数
+// 移除角色关联的所有现有密钥，根据参数创建新密钥或委托服务器管理
+// 这些变更会暂存在changelist中，直到调用publish
+Error Repository::RotateKey(RoleName role, bool serverManagesKey, const std::vector<std::string>& keyList) {
+    // 验证输入参数 (对应Go的checkRotationInput(role, serverManagesKey))
+    auto checkErr = checkRotationInput(role, serverManagesKey);
+    if (checkErr.hasError()) {
+        return checkErr;
+    }
+    
+    // 获取用于轮转的公钥列表 (对应Go的pubKeyList, err := r.pubKeyListForRotation(role, serverManagesKey, keyList))
+    auto pubKeysResult = pubKeyListForRotation(role, serverManagesKey, keyList);
+    if (!pubKeysResult.ok()) {
+        return pubKeysResult.error();
+    }
+    
+    auto pubKeyList = pubKeysResult.value();
+    
+    // 创建内存changelist (对应Go的cl := changelist.NewMemChangelist())
+    auto cl = std::make_shared<changelist::MemoryChangelist>();
+    
+    // 创建根文件密钥变更 (对应Go的r.rootFileKeyChange(cl, role, changelist.ActionCreate, pubKeyList))
+    auto keyChangeErr = rootFileKeyChange(cl, role, "create", pubKeyList);
+    if (keyChangeErr.hasError()) {
+        return keyChangeErr;
+    }
+    
+    // 发布变更 (对应Go的return r.publish(cl))
+    return publish(cl);
+}
+
+// publish函数实现 - 对应Go版本的publish函数
+// 使用提供的changelist发布变更到远程服务器
+Error Repository::publish(std::shared_ptr<changelist::Changelist> cl) {
+    try {
+        bool initialPublish = false;
+        
+        // 更新TUF元数据 (对应Go的r.updateTUF(true))
+        auto err = updateTUF(true);
+        if (!err.ok()) {
+            // 检查是否是仓库不存在的错误 (对应Go的ErrRepositoryNotExist检查)
+            if (std::string(err.what()).find("does not exist") != std::string::npos) {
+                
+                // 尝试从本地缓存加载 (对应Go的r.bootstrapRepo())
+                utils::GetLogger().Info("尝试从本地缓存加载", utils::LogContext().With("gun", gun_.empty() ? "default" : gun_));
+                err = bootstrapRepo();
+                if (!err.ok() && (std::string(err.what()).find("Metadata not found") != std::string::npos ||
+                                 std::string(err.what()).find("not found") != std::string::npos)) {
+                    
+                    utils::GetLogger().Info("No TUF data found locally or remotely - initializing repository for the first time",
+                        utils::LogContext().With("gun", gun_.empty() ? "default" : gun_));
+                    
+                    // 初始化仓库 (对应Go的r.Initialize(nil))
+                    err = Initialize({});
+                }
+                
+                if (!err.ok()) {
+                    utils::GetLogger().Debug("Unable to load or initialize repository during first publish",
+                        utils::LogContext().With("error", err.what()));
+                    return err;
+                }
+                
+                // 标记为首次发布 (对应Go的initialPublish = true)
+                initialPublish = true;
+            } else {
+                // 无法更新，因此无法发布 (对应Go的"We could not update, so we cannot publish")
+                utils::GetLogger().Error("Could not publish Repository since we could not update",
+                    utils::LogContext().With("error", err.what()));
+                return err;
+            }
+        }
+
+        // 应用changelist到repo (对应Go的applyChangelist(r.tufRepo, r.invalid, cl))
+        err = utils::applyChangelist(tufRepo_, invalidRepo_, cl);
+        if (!err.ok()) {
+            utils::GetLogger().Debug("Error applying changelist");
+            return err;
+        }
+        
+        // 准备需要更新的TUF文件 (对应Go的updatedFiles := make(map[data.RoleName][]byte))
+        std::map<std::string, std::vector<uint8_t>> updatedFiles;
+        
+        // 检查并签署Root文件 (对应Go的signRootIfNecessary)
+        err = signRootIfNecessary(updatedFiles, initialPublish);
+        if (!err.ok()) {
+            return err;
+        }
+        
+        // 签署Targets文件 (对应Go的signTargets)
+        err = signTargets(updatedFiles, initialPublish);
+        if (!err.ok()) {
+            return err;
+        }
+        
+        // 处理Snapshot文件 (对应Go的snapshot处理逻辑)
+        if (!tufRepo_ || !tufRepo_->GetSnapshot()) {
+            // 如果没有snapshot文件，尝试初始化 (对应Go的r.tufRepo.InitSnapshot())
+            if (tufRepo_) {
+                auto initResult = tufRepo_->InitSnapshot();
+                if (!initResult.ok()) {
+                    return Error("Failed to initialize snapshot: " + initResult.error().what());
+                }
+            }
+        }
+        
+        // 尝试序列化并签署snapshot (对应Go的serializeCanonicalRole)
+        if (tufRepo_) {
+            try {
+                auto snapshotResult = utils::serializeCanonicalRole(tufRepo_, RoleName::SnapshotRole, {});
+                if (!snapshotResult.empty()) {
+                    // 成功签署snapshot
+                    updatedFiles["snapshot"] = snapshotResult;
+                    utils::GetLogger().Debug("Successfully signed snapshot locally");
+                } else {
+                    // 签署失败，假设服务器会签署 (对应Go的"Assuming that server should sign the snapshot")
+                    utils::GetLogger().Debug("Client does not have the key to sign snapshot. "
+                        "Assuming that server should sign the snapshot.");
+                }
+            } catch (const std::exception& e) {
+                // 如果是其他类型的错误（非密钥不足），则传播错误
+                return Error("Failed to serialize snapshot: " + std::string(e.what()));
+            }
+        }
+        
+        // 推送更新到远程服务器 (对应Go的remote.SetMulti)
+        if (remoteStore_) {
+            // 准备批量上传的元数据map - 对应Go版本的SetMulti
+            // 需要验证和格式化数据，确保发送到服务器的是有效的JSON
+            std::map<std::string, std::vector<uint8_t>> metasToUpload;
+            
+            for (const auto& [roleName, data] : updatedFiles) {
+                // 验证vector<uint8_t>是否包含有效的JSON数据
+                try {
+                    std::string jsonStr(data.begin(), data.end());
+                    json jsonData = json::parse(jsonStr);
+                    
+                    // 重新序列化以确保格式正确性（去除多余空格等）
+                    std::string formattedJsonStr = jsonData.dump();
+                    std::vector<uint8_t> formattedData(formattedJsonStr.begin(), formattedJsonStr.end());
+                    
+                    metasToUpload[roleName] = formattedData;
+                    
+                } catch (const json::exception& e) {
+                    return Error("Failed to parse metadata JSON for " + roleName + ": " + e.what());
+                }
+            }
+            
+            // 使用SetMulti一次性上传所有元数据，保持服务器一致性
+            err = remoteStore_->SetMulti(metasToUpload);
+            if (!err.ok()) {
+                return Error("Failed to publish metadata using SetMulti: " + err.what());
+            }
+            
+            utils::GetLogger().Info("成功批量发布元数据", 
+                utils::LogContext()
+                    .With("gun", gun_.empty() ? "default" : gun_)
+                    .With("files_count", std::to_string(metasToUpload.size())));
+        }
+        
+        return Error(); // 成功
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to publish: ") + e.what());
     }
 }
 

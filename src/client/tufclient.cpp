@@ -41,24 +41,27 @@ Result<std::tuple<std::shared_ptr<tuf::Repo>, std::shared_ptr<tuf::Repo>>> TUFCl
     
     auto updateErr = update();
     if (!updateErr.ok()) {
-        utils::GetLogger().Debug("Error occurred. Root will be downloaded and another update attempted");
-        utils::GetLogger().Debug("Resetting the TUF builder...");
-        
+        utils::GetLogger().Info("Error occurred. Root will be downloaded and another update attempted");
+        utils::GetLogger().Info("Resetting the TUF builder...");
+        utils::GetLogger().Info("Client Update:  ", utils::LogContext()
+                    .With("message", updateErr.getMessage()));
+
         // 重置newBuilder
         newBuilder_ = newBuilder_->bootstrapNewBuilder();
         
         // 更新root
         auto updateRootErr = updateRoot();
         if (!updateRootErr.ok()) {
-            utils::GetLogger().Debug("Client Update (Root): " + updateRootErr.what());
+            utils::GetLogger().Info("Client Update (Root): " + updateRootErr.what());
             return Result<std::tuple<std::shared_ptr<tuf::Repo>, std::shared_ptr<tuf::Repo>>>(updateRootErr);
         }
         
         // 如果我们再次出错，现在我们有最新的root，只是想要失败退出
         // 因为没有期望问题可以自动解决
-        utils::GetLogger().Debug("retrying TUF client update");
+        utils::GetLogger().Info("retrying TUF client update");
         auto retryUpdateErr = update();
         if (!retryUpdateErr.ok()) {
+            utils::GetLogger().Info("retrying TUF client update Failed !");
             return Result<std::tuple<std::shared_ptr<tuf::Repo>, std::shared_ptr<tuf::Repo>>>(retryUpdateErr);
         }
     }
@@ -569,6 +572,7 @@ Result<std::unique_ptr<TUFClient>> bootstrapClient(const TUFLoadOptions& options
     auto cachedRootResult = options.Cache->GetSized(ROOT_ROLE, -1); // NoSizeLimit equivalent
     if (cachedRootResult.ok()) {
         auto rootJSON = cachedRootResult.value();
+        utils::GetLogger().Info("cachedRootResult success");
         
         // 如果无法加载缓存的root，硬失败，因为这是我们锚定信任的方式
         auto loadOldErr = oldBuilder->load(RoleName::RootRole, rootJSON, minVersion, true);

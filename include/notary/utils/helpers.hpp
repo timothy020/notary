@@ -6,6 +6,7 @@
 #include "notary/tuf/repo.hpp"
 #include "notary/changelist/changelist.hpp"
 #include "notary/crypto/crypto_service.hpp"
+#include "notary/storage/httpstore.hpp"
 
 namespace notary {
 namespace utils {
@@ -51,6 +52,12 @@ namespace utils {
     // warnRolesNearExpiry 检查接近过期的角色并发出警告
     // 对应Go版本的warnRolesNearExpiry函数
     void warnRolesNearExpiry(const std::shared_ptr<tuf::Repo>& repo);
+
+    // rotateRemoteKey函数声明 - 对应Go版本的rotateRemoteKey函数
+    // 请求服务器轮转指定角色的密钥
+    Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(RoleName role, 
+                                                              std::shared_ptr<storage::RemoteStore> remoteStore,
+                                                              const std::string& gun);
 
 }
 }

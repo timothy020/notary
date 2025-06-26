@@ -176,6 +176,107 @@ std::shared_ptr<PublicKey> NewECDSAx509PublicKey(const std::vector<uint8_t>& x50
     return std::make_shared<ECDSAx509PublicKey>(x509Data);
 }
 
+// typedPublicKey函数实现 - 对应Go版本的typedPublicKey函数
+// 根据TUFKey的算法类型创建相应的具体公钥类型实例
+std::shared_ptr<PublicKey> typedPublicKey(const TUFKey& tk) {
+    std::string algorithm = tk.Algorithm();
+    std::vector<uint8_t> publicData = tk.Public();
+    
+    // 根据算法类型创建相应的公钥对象 (对应Go的switch tk.Algorithm())
+    if (algorithm == ECDSA_KEY) {
+        // 对应Go的return &ECDSAPublicKey{TUFKey: tk}
+        return std::make_shared<ECDSAPublicKey>(publicData);
+    } else if (algorithm == ECDSA_X509_KEY) {
+        // 对应Go的return &ECDSAx509PublicKey{TUFKey: tk}
+        return std::make_shared<ECDSAx509PublicKey>(publicData);
+    } else if (algorithm == RSA_KEY) {
+        // 对应Go的return &RSAPublicKey{TUFKey: tk}
+        return std::make_shared<RSAPublicKey>(publicData);
+    } else if (algorithm == RSA_X509_KEY) {
+        // 对应Go的return &RSAx509PublicKey{TUFKey: tk}
+        return std::make_shared<RSAx509PublicKey>(publicData);
+    } else if (algorithm == ED25519_KEY) {
+        // 对应Go的return &ED25519PublicKey{TUFKey: tk}
+        return std::make_shared<ED25519PublicKey>(publicData);
+    } else {
+        // 对应Go的return &UnknownPublicKey{TUFKey: tk}
+        // 返回一个UnknownPublicKey类型的对象
+        return std::make_shared<UnknownPublicKey>(algorithm, publicData);
+    }
+}
+
+// UnmarshalPublicKey函数实现 - 对应Go版本的UnmarshalPublicKey函数
+// 用于解析JSON数据中的单个公钥
+Result<std::shared_ptr<PublicKey>> UnmarshalPublicKey(const std::vector<uint8_t>& data) {
+    try {
+        // 将字节数据转换为字符串 (对应Go的data []byte参数)
+        std::string jsonStr(data.begin(), data.end());
+        
+        // 调用字符串版本的函数
+        return UnmarshalPublicKey(jsonStr);
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to convert byte data to string: ") + e.what());
+    }
+}
+
+Result<std::shared_ptr<PublicKey>> UnmarshalPublicKey(const std::string& jsonData) {
+    try {
+        // 解析JSON数据 (对应Go的json.Unmarshal(data, &parsed))
+        nlohmann::json keyJson = nlohmann::json::parse(jsonData);
+        
+        // 创建TUFKey对象来解析JSON结构
+        TUFKey parsed;
+        
+        // 解析keytype字段 (对应Go的TUFKey结构的Algorithm字段)
+        if (!keyJson.contains("keytype")) {
+            return Error("Missing 'keytype' field in public key JSON");
+        }
+        std::string keytype = keyJson["keytype"];
+        
+        // 解析keyval字段 (对应Go的TUFKey结构的Public字段)
+        if (!keyJson.contains("keyval") || !keyJson["keyval"].contains("public")) {
+            return Error("Missing 'keyval.public' field in public key JSON");
+        }
+        
+        // 获取公钥数据
+        std::string publicStr = keyJson["keyval"]["public"];
+        std::vector<uint8_t> publicData;
+        
+        // 如果公钥数据是Base64编码的，需要解码
+        // 这里假设publicStr直接是字节数据的字符串表示
+        // 在实际实现中可能需要Base64解码
+        try {
+            // 尝试Base64解码
+            publicData = utils::Base64Decode(publicStr);
+        } catch (const std::exception&) {
+            // 如果Base64解码失败，直接使用字符串字节
+            publicData = std::vector<uint8_t>(publicStr.begin(), publicStr.end());
+        }
+        
+        // 创建TUFKey对象 (对应Go的var parsed TUFKey)
+        parsed = TUFKey(keytype, publicData);
+        
+        // 使用typedPublicKey创建具体的公钥类型 (对应Go的typedPublicKey(parsed))
+        auto publicKey = typedPublicKey(parsed);
+        if (!publicKey) {
+            return Error("Failed to create typed public key from TUFKey");
+        }
+        
+        utils::GetLogger().Debug("Successfully unmarshaled public key", 
+            utils::LogContext()
+                .With("algorithm", keytype)
+                .With("keyID", publicKey->ID()));
+        
+        return publicKey;
+        
+    } catch (const nlohmann::json::exception& e) {
+        return Error(std::string("Failed to parse JSON: ") + e.what());
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to unmarshal public key: ") + e.what());
+    }
+}
+
 // // ECDSAPublicKey实现
 // ECDSAPublicKey::ECDSAPublicKey(const std::vector<uint8_t>& derData) : derData_(derData) {}
 

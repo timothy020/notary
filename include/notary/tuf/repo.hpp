@@ -67,7 +67,7 @@ struct SignedCommon {
 
 // 文件元数据
 struct FileMeta {
-    int64_t Length;
+    int64_t Length = 0; // 默认为0，与Go版本保持一致
     std::map<std::string, std::vector<uint8_t>> Hashes;
     json Custom; // 可选的自定义数据
     

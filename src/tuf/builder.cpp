@@ -14,6 +14,8 @@ namespace tuf {
 // ConsistentInfo 实现
 bool ConsistentInfo::checksumKnown() const {
     // 空哈希，无大小：这是零值
+    // Go版本: return len(c.fileMeta.Hashes) > 0 || c.fileMeta.Length != 0
+    // 关键：有哈希值说明已知（即使是空文件），或者长度不为0
     return !fileMeta_.Hashes.empty() || fileMeta_.Length != 0;
 }
 
@@ -146,11 +148,12 @@ ConsistentInfo RepoBuilderImpl::getConsistentInfo(RoleName roleName) const {
     switch (roleName) {
         case RoleName::TimestampRole:
             // 我们不想获得一致的时间戳，但我们确实想限制其大小
-            info.setFileMeta(FileMeta{.Length = 100 * 1024}); // 100KB 限制
+            // 使用与Go版本相同的1MB限制 (1 << 20)
+            info.setFileMeta(FileMeta{.Length = 1024 * 1024}); // 1MB 限制，与Go版本的MaxTimestampSize一致
             break;
         case RoleName::SnapshotRole:
             if (auto timestamp = repo_->GetTimestamp()) {
-                auto it = timestamp->Signed.Meta.find(roleToString(roleName));
+                auto it = timestamp->Signed.Meta.find(roleToString(roleName) + ".json");
                 if (it != timestamp->Signed.Meta.end()) {
                     info.setFileMeta(it->second);
                 }
@@ -160,7 +163,7 @@ ConsistentInfo RepoBuilderImpl::getConsistentInfo(RoleName roleName) const {
             if (bootstrappedRootChecksum_) {
                 info.setFileMeta(*bootstrappedRootChecksum_);
             } else if (auto snapshot = repo_->GetSnapshot()) {
-                auto it = snapshot->Signed.Meta.find(roleToString(roleName));
+                auto it = snapshot->Signed.Meta.find(roleToString(roleName) + ".json");
                 if (it != snapshot->Signed.Meta.end()) {
                     info.setFileMeta(it->second);
                 }
@@ -168,7 +171,7 @@ ConsistentInfo RepoBuilderImpl::getConsistentInfo(RoleName roleName) const {
             break;
         default:
             if (auto snapshot = repo_->GetSnapshot()) {
-                auto it = snapshot->Signed.Meta.find(roleToString(roleName));
+                auto it = snapshot->Signed.Meta.find(roleToString(roleName) + ".json");
                 if (it != snapshot->Signed.Meta.end()) {
                     info.setFileMeta(it->second);
                 }
@@ -581,7 +584,7 @@ Error RepoBuilderImpl::loadSnapshot(const std::vector<uint8_t>& content, int min
     // 到这一点，剩下的唯一要验证的是现有的校验和 - 我们可以使用
     // 这个snapshot来引导下一个builder（如果需要的话） - 我们不需要做
     // 2值赋值，因为我们已经验证了signedSnapshot，它必须有root元数据
-    auto rootMetaIt = signedSnapshot->Signed.Meta.find(roleToString(RoleName::RootRole));
+    auto rootMetaIt = signedSnapshot->Signed.Meta.find(roleToString(RoleName::RootRole) + ".json");
     if (rootMetaIt != signedSnapshot->Signed.Meta.end()) {
         nextRootChecksum_ = std::make_shared<FileMeta>(rootMetaIt->second);
     }

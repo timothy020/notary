@@ -32,6 +32,9 @@ public:
     // 实现PublicKeyStore接口
     Result<std::vector<uint8_t>> GetKey(const std::string& name) override;
     
+    // 实现密钥轮转接口 - 对应Go版本的rotateKey
+    Result<std::vector<uint8_t>> RotateKey(const std::string& role);
+    
     // 辅助工厂方法 - 对应Go版本的NewNotaryServerStore
     static std::unique_ptr<HttpStore> NewNotaryServerStore(const std::string& serverURL, const std::string& gun);
 

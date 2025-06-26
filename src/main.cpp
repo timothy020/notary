@@ -1043,6 +1043,18 @@ int main(int argc, char** argv) {
     auto keysList = key->add_subcommand("list", "List all signing keys");
     auto keyRemove = key->add_subcommand("remove", "Remove a signing key");
     auto keyPasswd = key->add_subcommand("passwd", "Change the passphrase for a signing key");
+    auto keyRotate = key->add_subcommand("rotate", "Rotate a key for a repository and role");
+    
+    // key rotate 参数定义 - 对应Go版本的keysRotate函数参数
+    std::string rotateGUN;
+    std::string rotateRole;
+    bool serverManaged = false;
+    std::vector<std::string> keyFiles;
+    
+    keyRotate->add_option("gun", rotateGUN, "Globally Unique Name of the repository")->required();
+    keyRotate->add_option("role", rotateRole, "Role to rotate key for (root, targets, snapshot, timestamp)")->required();
+    keyRotate->add_flag("--server-managed", serverManaged, "Use server-managed key rotation");
+    keyRotate->add_option("--key-file", keyFiles, "Key file(s) to import for rotation (can be used multiple times)");
     
     keysList->callback([&]() {
         try {
@@ -1220,6 +1232,98 @@ int main(int argc, char** argv) {
             
         } catch (const std::exception& e) {
             utils::GetLogger().Error("Error: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+    // key rotate 命令实现 - 对应Go版本的keysRotate函数
+    keyRotate->callback([&]() {
+        try {
+            // 1. 验证参数 (对应Go的len(args) < 2检查)
+            if (rotateGUN.empty() || rotateRole.empty()) {
+                utils::GetLogger().Error("Must specify a GUN and a key role to rotate");
+                return;
+            }
+            
+            // 2. 验证角色名称 (对应Go的rotateKeyRole := data.RoleName(args[1]))
+            if (rotateRole != "root" && rotateRole != "targets" && 
+                rotateRole != "snapshot" && rotateRole != "timestamp") {
+                utils::GetLogger().Error("Invalid role name: " + rotateRole);
+                utils::GetLogger().Info("Valid roles are: root, targets, snapshot, timestamp");
+                return;
+            }
+            
+            RoleName rotateKeyRole = stringToRole(rotateRole);
+            
+            // 3. 加载配置 (对应Go的config, err := k.configGetter())
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Starting key rotation", utils::LogContext()
+                    .With("gun", rotateGUN)
+                    .With("role", rotateRole)
+                    .With("serverManaged", serverManaged ? "true" : "false")
+                    .With("keyFileCount", std::to_string(keyFiles.size())));
+            }
+            
+            // 4. 创建仓库 (对应Go的notaryclient.NewFileCachedRepository)
+            Repository repo(rotateGUN, trustDir, serverURL);
+            
+            std::vector<std::string> keyList;
+            
+            // 5. 处理密钥文件导入 (对应Go的for _, keyFile := range k.rotateKeyFiles)
+            for (const auto& keyFile : keyFiles) {
+                utils::GetLogger().Info("Importing key file", utils::LogContext()
+                    .With("keyFile", keyFile)
+                    .With("role", rotateRole));
+                
+                // TODO: 实现readKey函数来读取密钥文件
+                // 这需要解析PEM格式的密钥文件并验证角色
+                // auto privKey = readKey(rotateKeyRole, keyFile, passRetriever);
+                // auto err = repo.GetCryptoService()->AddKey(rotateKeyRole, rotateGUN, privKey);
+                // if (!err.ok()) {
+                //     utils::GetLogger().Error("Error importing key: " + err.what());
+                //     return;
+                // }
+                // keyList.push_back(privKey->ID());
+                
+                utils::GetLogger().Warn("Key file import functionality not yet fully implemented");
+                utils::GetLogger().Info("Skipping key file: " + keyFile);
+            }
+            
+            // 6. 根角色轮转确认 (对应Go的if rotateKeyRole == data.CanonicalRootRole)
+            if (rotateKeyRole == RoleName::RootRole) {
+                std::cout << "Warning: you are about to rotate your root key.\n\n";
+                std::cout << "You must use your old key to sign this root rotation.\n";
+                std::cout << "Are you sure you want to proceed?  (yes/no)  ";
+                
+                if (!askConfirm(std::cin)) {
+                    std::cout << "\nAborting action." << std::endl;
+                    return;
+                }
+            }
+            
+            // 7. 执行密钥轮转 (对应Go的nRepo.RotateKey(rotateKeyRole, k.rotateKeyServerManaged, keyList))
+            utils::GetLogger().Info("Executing key rotation", utils::LogContext()
+                .With("gun", rotateGUN)
+                .With("role", rotateRole)
+                .With("serverManaged", serverManaged ? "true" : "false"));
+            
+            auto rotateErr = repo.RotateKey(rotateKeyRole, serverManaged, keyList);
+            if (!rotateErr.ok()) {
+                utils::GetLogger().Error("Key rotation failed: " + rotateErr.what());
+                return;
+            }
+            
+            // 8. 成功消息 (对应Go的cmd.Printf("Successfully rotated %s key for repository %s\n", rotateKeyRole, gun))
+            std::cout << "Successfully rotated " << rotateRole << " key for repository " << rotateGUN << std::endl;
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error during key rotation: " + std::string(e.what()));
             return;
         }
     });

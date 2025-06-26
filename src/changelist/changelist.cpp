@@ -1,5 +1,6 @@
 #include "notary/changelist/changelist.hpp"
 #include "notary/utils/logger.hpp"
+#include "notary/utils/tools.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
@@ -47,12 +48,111 @@ std::vector<uint8_t> TUFRootData::Serialize() const {
         json keyJson;
         keyJson["id"] = key->ID();
         keyJson["algorithm"] = key->Algorithm();
-        keyJson["public"] = key->Public();
+        
+        // 将公钥数据转换为Base64字符串，而不是直接使用vector<uint8_t>
+        auto publicData = key->Public();
+        std::string publicBase64 = utils::Base64Encode(publicData);
+        keyJson["public"] = publicBase64;
+        
         j["keys"].push_back(keyJson);
     }
     
     std::string jsonStr = j.dump();
     return std::vector<uint8_t>(jsonStr.begin(), jsonStr.end());
+}
+
+// TUFRootData反序列化方法 - 对应Go版本的json.Unmarshal(c.Content(), &d)
+Error TUFRootData::Deserialize(const std::vector<uint8_t>& data) {
+    try {
+        // 将字节数据转换为字符串并解析JSON
+        std::string jsonStr(data.begin(), data.end());
+        json j = json::parse(jsonStr);
+        
+        // 解析roleName字段 (对应Go的d.RoleName)
+        if (!j.contains("roleName") && !j.contains("role")) {
+            return Error("Missing role name in TUFRootData JSON");
+        }
+        
+        std::string roleStr;
+        if (j.contains("roleName")) {
+            roleStr = j["roleName"];
+        } else {
+            roleStr = j["role"];
+        }
+        roleName = stringToRole(roleStr);
+        
+        // 清空现有密钥
+        keys.clear();
+        
+        // 解析keys字段 (对应Go的d.Keys)
+        if (!j.contains("keys")) {
+            return Error("Missing keys in TUFRootData JSON");
+        }
+        
+        const auto& keysJson = j["keys"];
+        if (!keysJson.is_array()) {
+            return Error("Keys field must be an array in TUFRootData JSON");
+        }
+        
+        // 遍历每个密钥
+        for (const auto& keyJson : keysJson) {
+            try {
+                std::string algorithm;
+                std::vector<uint8_t> publicData;
+                
+                // 解析algorithm字段
+                if (keyJson.contains("algorithm")) {
+                    algorithm = keyJson["algorithm"];
+                } else {
+                    utils::GetLogger().Warn("Key missing algorithm field, skipping");
+                    continue;
+                }
+                
+                // 解析public字段
+                if (keyJson.contains("public")) {
+                    std::string publicStr = keyJson["public"];
+                    try {
+                        // 尝试Base64解码
+                        publicData = utils::Base64Decode(publicStr);
+                    } catch (const std::exception&) {
+                        // 如果Base64解码失败，直接使用字符串字节
+                        publicData = std::vector<uint8_t>(publicStr.begin(), publicStr.end());
+                    }
+                } else {
+                    utils::GetLogger().Warn("Key missing public data, skipping");
+                    continue;
+                }
+                
+                // 创建公钥对象
+                auto publicKey = crypto::NewPublicKey(algorithm, publicData);
+                if (publicKey) {
+                    keys.push_back(publicKey);
+                } else {
+                    utils::GetLogger().Warn("Failed to create public key", 
+                        utils::LogContext().With("algorithm", algorithm));
+                }
+                
+            } catch (const std::exception& e) {
+                utils::GetLogger().Warn("Error parsing key in TUFRootData", 
+                    utils::LogContext().With("error", e.what()));
+                continue;
+            }
+        }
+        
+        if (keys.empty()) {
+            return Error("No valid keys found in TUFRootData");
+        }
+        
+        utils::GetLogger().Debug("Successfully deserialized TUFRootData", 
+            utils::LogContext()
+                .With("role", roleStr)
+                .With("keyCount", std::to_string(keys.size())));
+        
+        return Error(); // 成功
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to deserialize TUFRootData: ") + e.what());
+    }
 }
 
 // FileChangeListIterator实现
@@ -285,6 +385,64 @@ Error FileChangelist::Close() {
 std::unique_ptr<ChangeIterator> FileChangelist::NewIterator() {
     auto fileInfos = getFileNames(dir_);
     return std::make_unique<FileChangeListIterator>(dir_, fileInfos);
+}
+
+// MemoryChangeListIterator实现
+MemoryChangeListIterator::MemoryChangeListIterator(const std::vector<std::shared_ptr<Change>>& changes)
+    : changes_(changes), currentIndex_(0) {
+}
+
+std::shared_ptr<Change> MemoryChangeListIterator::Next() {
+    if (currentIndex_ < changes_.size()) {
+        return changes_[currentIndex_++];
+    }
+    return nullptr;
+}
+
+bool MemoryChangeListIterator::HasNext() const {
+    return currentIndex_ < changes_.size();
+}
+
+// MemoryChangelist实现
+std::vector<std::shared_ptr<Change>> MemoryChangelist::List() const {
+    return changes_;
+}
+
+Error MemoryChangelist::Add(const std::shared_ptr<Change>& change) {
+    if (!change) {
+        return Error("Cannot add null change to memory changelist");
+    }
+    changes_.push_back(change);
+    return Error(); // 成功
+}
+
+Error MemoryChangelist::Clear(const std::string& archive) {
+    // 内存changelist不支持归档，直接清空
+    changes_.clear();
+    return Error(); // 成功
+}
+
+Error MemoryChangelist::Remove(const std::vector<int>& idxs) {
+    // 按降序排序索引，以便从后往前删除
+    std::vector<int> sortedIdxs = idxs;
+    std::sort(sortedIdxs.rbegin(), sortedIdxs.rend());
+    
+    for (int idx : sortedIdxs) {
+        if (idx >= 0 && idx < static_cast<int>(changes_.size())) {
+            changes_.erase(changes_.begin() + idx);
+        }
+    }
+    
+    return Error(); // 成功
+}
+
+Error MemoryChangelist::Close() {
+    // 内存changelist无需关闭操作
+    return Error(); // 成功
+}
+
+std::unique_ptr<ChangeIterator> MemoryChangelist::NewIterator() {
+    return std::make_unique<MemoryChangeListIterator>(changes_);
 }
 
 } // namespace changelist

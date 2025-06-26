@@ -388,11 +388,11 @@ json Targets::toJson() const {
     json j = Common.toJson();
     
     // 添加targets
-    json json;
+    json targetsJson;
     for (const auto& [name, meta] : targets) {
-        json[name] = meta.toJson();
+        targetsJson[name] = meta.toJson();
     }
-    j["targets"] = json;
+    j["targets"] = targetsJson;
     
     // 添加delegations（如果有）
     if (!delegations.Keys.empty() || !delegations.Roles.empty()) {
@@ -1132,20 +1132,54 @@ Error Repo::ReplaceBaseKeys(RoleName role, const std::vector<std::shared_ptr<cry
         return Error("Root metadata not loaded");
     }
     
-    // 获取旧的密钥ID列表
+    utils::GetLogger().Info("Starting ReplaceBaseKeys", utils::LogContext()
+        .With("role", roleToString(role))
+        .With("newKeyCount", std::to_string(keys.size())));
+    
+    // 使用GetBaseRole方法获取角色，与Go版本保持一致 (对应Go的r, err := tr.GetBaseRole(role))
+    auto baseRoleResult = GetBaseRole(role);
+    if (!baseRoleResult.ok()) {
+        return baseRoleResult.error();
+    }
+    
+    auto baseRole = baseRoleResult.value();
+    
+    // 从BaseRole中提取密钥ID列表 (对应Go的r.ListKeyIDs()...)
     std::vector<std::string> oldKeyIDs;
-    for (const auto& key : root_->Signed.Roles[role].Keys()) {
+    for (const auto& key : baseRole.Keys()) {
         oldKeyIDs.push_back(key->ID());
     }
     
-    // 移除旧密钥
+    utils::GetLogger().Info("Found old keys to remove", utils::LogContext()
+        .With("role", roleToString(role))
+        .With("oldKeyCount", std::to_string(oldKeyIDs.size())));
+    
+    // 移除旧密钥 (对应Go的tr.RemoveBaseKeys(role, r.ListKeyIDs()...))
     Error err = RemoveBaseKeys(role, oldKeyIDs);
     if (!err.ok()) {
+        utils::GetLogger().Error("Failed to remove old keys", utils::LogContext()
+            .With("role", roleToString(role))
+            .With("error", err.what()));
         return err;
     }
     
-    // 添加新密钥
-    return AddBaseKeys(role, keys);
+    utils::GetLogger().Info("Successfully removed old keys", utils::LogContext()
+        .With("role", roleToString(role)));
+    
+    // 添加新密钥 (对应Go的return tr.AddBaseKeys(role, keys...))
+    err = AddBaseKeys(role, keys);
+    if (!err.ok()) {
+        utils::GetLogger().Error("Failed to add new keys", utils::LogContext()
+            .With("role", roleToString(role))
+            .With("error", err.what()));
+        return err;
+    }
+    
+    utils::GetLogger().Info("Successfully completed ReplaceBaseKeys", utils::LogContext()
+        .With("role", roleToString(role))
+        .With("newKeyCount", std::to_string(keys.size())));
+    
+    return Error();
 }
 
 Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs) {
@@ -1153,8 +1187,15 @@ Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs
         return Error("Root metadata not loaded");
     }
     
+    utils::GetLogger().Info("Starting RemoveBaseKeys", utils::LogContext()
+        .With("role", roleToString(role))
+        .With("keyIDCount", std::to_string(keyIDs.size())));
+    
+    
     // 从角色中移除密钥ID
     auto& roleKeys = root_->Signed.Roles[role].Keys();
+    size_t originalSize = roleKeys.size();
+    
     roleKeys.erase(
         std::remove_if(roleKeys.begin(), roleKeys.end(),
             [&keyIDs](const std::shared_ptr<crypto::PublicKey>& key) {
@@ -1162,6 +1203,13 @@ Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs
             }),
         roleKeys.end()
     );
+    
+    size_t newSize = roleKeys.size();
+    utils::GetLogger().Info("Removed keys from role", utils::LogContext()
+        .With("role", roleToString(role))
+        .With("originalKeyCount", std::to_string(originalSize))
+        .With("newKeyCount", std::to_string(newSize))
+        .With("removedCount", std::to_string(originalSize - newSize)));
     
     // 检查密钥是否仍被其他角色使用
     std::set<std::string> usedKeyIDs;
@@ -1176,15 +1224,45 @@ Error Repo::RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs
     if (role != RoleName::RootRole) {
         for (const auto& keyID : keyIDs) {
             if (usedKeyIDs.find(keyID) == usedKeyIDs.end()) {
-                root_->Signed.Keys.erase(keyID);
-                // 从加密服务中移除密钥
-                // cryptoService_.RemoveKey(keyID); // 需要实现此方法
+                // 从全局密钥字典中移除密钥
+                auto it = root_->Signed.Keys.find(keyID);
+                if (it != root_->Signed.Keys.end()) {
+                    root_->Signed.Keys.erase(it);
+                    utils::GetLogger().Debug("Removed key from global keys", utils::LogContext()
+                        .With("keyID", keyID));
+                }
+                
+                // 关键修复：删除私钥文件 (对应Go版本的tr.cryptoService.RemoveKey(k))
+                if (cryptoService_) {
+                    auto removeErr = cryptoService_->RemoveKey(keyID);
+                    if (!removeErr.ok()) {
+                        utils::GetLogger().Warn("Failed to remove private key file", utils::LogContext()
+                            .With("keyID", keyID)
+                            .With("error", removeErr.what()));
+                        // 不返回错误，因为主要目标是更新元数据
+                        // 私钥文件删除失败只记录警告
+                    } else {
+                        utils::GetLogger().Info("Successfully removed private key file", utils::LogContext()
+                            .With("keyID", keyID)
+                            .With("role", roleToString(role)));
+                    }
+                }
+            } else {
+                utils::GetLogger().Debug("Key still in use by other roles, not removing from global keys", utils::LogContext()
+                    .With("keyID", keyID));
             }
         }
+    } else {
+        utils::GetLogger().Debug("Root role keys are preserved during rotation", utils::LogContext()
+            .With("role", roleToString(role)));
     }
     
     root_->Dirty = true;
     markRoleDirty(role);
+    
+    utils::GetLogger().Info("Successfully completed RemoveBaseKeys", utils::LogContext()
+        .With("role", roleToString(role)));
+    
     return Error();
 }
 
