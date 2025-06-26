@@ -43,16 +43,16 @@ class ConsistentInfo {
 public:
     // 构造函数
     ConsistentInfo() = default;
-    explicit ConsistentInfo(RoleName roleName) : roleName_(roleName) {}
-    ConsistentInfo(RoleName roleName, const FileMeta& fileMeta) 
+    explicit ConsistentInfo(const std::string& roleName) : roleName_(roleName) {}
+    ConsistentInfo(const std::string& roleName, const FileMeta& fileMeta) 
         : roleName_(roleName), fileMeta_(fileMeta) {}
     
     // 访问器
-    RoleName getRoleName() const { return roleName_; }
+    std::string getRoleName() const { return roleName_; }
     const FileMeta& getFileMeta() const { return fileMeta_; }
     
     // 设置器
-    void setRoleName(RoleName roleName) { roleName_ = roleName; }
+    void setRoleName(const std::string& roleName) { roleName_ = roleName; }
     void setFileMeta(const FileMeta& fileMeta) { fileMeta_ = fileMeta; }
     
     // 确定是否知道足够信息来提供大小和一致性名称
@@ -65,7 +65,7 @@ public:
     int64_t length() const;
 
 private:
-    RoleName roleName_ = RoleName::RootRole;
+    std::string roleName_ = ROOT_ROLE;
     FileMeta fileMeta_;
 };
 
@@ -75,7 +75,7 @@ public:
     virtual ~RepoBuilder() = default;
     
     // 加载元数据
-    virtual Error load(RoleName roleName, const std::vector<uint8_t>& content, 
+    virtual Error load(const std::string& roleName, const std::vector<uint8_t>& content, 
                       int minVersion, bool allowExpired) = 0;
     
     // 加载根元数据以进行更新
@@ -101,15 +101,15 @@ public:
         const TrustPinConfig& trustpin) = 0;
     
     // 信息函数
-    virtual bool isLoaded(RoleName roleName) const = 0;
-    virtual int getLoadedVersion(RoleName roleName) const = 0;
-    virtual ConsistentInfo getConsistentInfo(RoleName roleName) const = 0;
+    virtual bool isLoaded(const std::string& roleName) const = 0;
+    virtual int getLoadedVersion(const std::string& roleName) const = 0;
+    virtual ConsistentInfo getConsistentInfo(const std::string& roleName) const = 0;
 };
 
 // 已完成构建器 - 拒绝任何更多输入或输出
 class FinishedBuilder : public RepoBuilder {
 public:
-    Error load(RoleName roleName, const std::vector<uint8_t>& content, 
+    Error load(const std::string& roleName, const std::vector<uint8_t>& content, 
               int minVersion, bool allowExpired) override;
     
     Error loadRootForUpdate(const std::vector<uint8_t>& content, 
@@ -128,9 +128,9 @@ public:
     std::unique_ptr<RepoBuilder> bootstrapNewBuilderWithNewTrustpin(
         const TrustPinConfig& trustpin) override;
     
-    bool isLoaded(RoleName roleName) const override;
-    int getLoadedVersion(RoleName roleName) const override;
-    ConsistentInfo getConsistentInfo(RoleName roleName) const override;
+    bool isLoaded(const std::string& roleName) const override;
+    int getLoadedVersion(const std::string& roleName) const override;
+    ConsistentInfo getConsistentInfo(const std::string& roleName) const override;
 };
 
 // 实际的仓库构建器实现
@@ -147,7 +147,7 @@ public:
                    const TrustPinConfig& trustpin);
     
     // 实现RepoBuilder接口
-    Error load(RoleName roleName, const std::vector<uint8_t>& content, 
+    Error load(const std::string& roleName, const std::vector<uint8_t>& content, 
               int minVersion, bool allowExpired) override;
     
     Error loadRootForUpdate(const std::vector<uint8_t>& content, 
@@ -166,15 +166,15 @@ public:
     std::unique_ptr<RepoBuilder> bootstrapNewBuilderWithNewTrustpin(
         const TrustPinConfig& trustpin) override;
     
-    bool isLoaded(RoleName roleName) const override;
-    int getLoadedVersion(RoleName roleName) const override;
-    ConsistentInfo getConsistentInfo(RoleName roleName) const override;
+    bool isLoaded(const std::string& roleName) const override;
+    int getLoadedVersion(const std::string& roleName) const override;
+    ConsistentInfo getConsistentInfo(const std::string& roleName) const override;
 
     // Root验证相关方法
-    Result<BaseRole> buildBaseRoleFromRoot(std::shared_ptr<SignedRoot> signedRoot, RoleName roleName);
+    Result<BaseRole> buildBaseRoleFromRoot(std::shared_ptr<SignedRoot> signedRoot, const std::string& roleName);
     
     // 检查方法
-    Error checkRoleLoaded(RoleName singleRole);
+    Error checkRoleLoaded(const std::string& singleRole);
     
 private:
     // 私有成员变量
@@ -187,7 +187,7 @@ private:
     
     // 以防我们在快照和时间戳之前加载根和/或目标（或快照而不是时间戳），
     // 以便我们知道当带有校验和的数据进来时要验证什么
-    std::map<RoleName, std::vector<uint8_t>> loadedNotChecksummed_;
+    std::map<std::string, std::vector<uint8_t>> loadedNotChecksummed_;
     
     // 验证新根的引导值
     std::shared_ptr<SignedRoot> prevRoot_;
@@ -197,9 +197,9 @@ private:
     std::shared_ptr<FileMeta> nextRootChecksum_;
     
     // 私有辅助方法
-    Error checkPrereqsLoaded(RoleName roleName);
-    bool isValidRole(RoleName roleName);
-    Error loadOptions(RoleName roleName, const std::vector<uint8_t>& content, 
+    Error checkPrereqsLoaded(const std::string& roleName);
+    bool isValidRole(const std::string& roleName);
+    Error loadOptions(const std::string& roleName, const std::vector<uint8_t>& content, 
                      int minVersion, bool allowExpired, bool skipChecksum, bool allowLoaded);
     
     // 各种角色的加载方法
@@ -208,22 +208,22 @@ private:
     Error loadTimestamp(const std::vector<uint8_t>& content, int minVersion, bool allowExpired);
     Error loadSnapshot(const std::vector<uint8_t>& content, int minVersion, bool allowExpired);
     Error loadTargets(const std::vector<uint8_t>& content, int minVersion, bool allowExpired);
-    Error loadDelegation(RoleName roleName, const std::vector<uint8_t>& content, 
+    Error loadDelegation(const std::string& roleName, const std::vector<uint8_t>& content, 
                         int minVersion, bool allowExpired);
     
     // 校验和验证方法
     Error validateChecksumsFromTimestamp(std::shared_ptr<SignedTimestamp> ts);
     Error validateChecksumsFromSnapshot(std::shared_ptr<SignedSnapshot> sn);
-    Error validateChecksumFor(const std::vector<uint8_t>& content, RoleName roleName);
+    Error validateChecksumFor(const std::vector<uint8_t>& content, const std::string& roleName);
     
     // 字节转换和验证方法
     Result<std::shared_ptr<Signed>> bytesToSigned(const std::vector<uint8_t>& content, 
-                                                  RoleName roleName, bool skipChecksum);
+                                                  const std::string& roleName, bool skipChecksum);
     Result<std::shared_ptr<Signed>> bytesToSignedAndValidateSigs(const BaseRole& role, 
                                                                 const std::vector<uint8_t>& content);
     
     // 获取校验和方法
-    std::shared_ptr<std::map<std::string, std::vector<uint8_t>>> getChecksumsFor(RoleName role) const;
+    std::shared_ptr<std::map<std::string, std::vector<uint8_t>>> getChecksumsFor(const std::string& role) const;
 };
 
 // 构建器包装器 - 嵌入repoBuilder，但一旦调用Finish，就用finishedBuilder替换嵌入的对象
@@ -232,7 +232,7 @@ public:
     explicit RepoBuilderWrapper(std::unique_ptr<RepoBuilder> builder);
     
     // 实现RepoBuilder接口，大部分委托给内部构建器
-    Error load(RoleName roleName, const std::vector<uint8_t>& content, 
+    Error load(const std::string& roleName, const std::vector<uint8_t>& content, 
               int minVersion, bool allowExpired) override;
     
     Error loadRootForUpdate(const std::vector<uint8_t>& content, 
@@ -251,9 +251,9 @@ public:
     std::unique_ptr<RepoBuilder> bootstrapNewBuilderWithNewTrustpin(
         const TrustPinConfig& trustpin) override;
     
-    bool isLoaded(RoleName roleName) const override;
-    int getLoadedVersion(RoleName roleName) const override;
-    ConsistentInfo getConsistentInfo(RoleName roleName) const override;
+    bool isLoaded(const std::string& roleName) const override;
+    int getLoadedVersion(const std::string& roleName) const override;
+    ConsistentInfo getConsistentInfo(const std::string& roleName) const override;
 
 private:
     std::unique_ptr<RepoBuilder> builder_;

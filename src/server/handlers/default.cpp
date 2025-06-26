@@ -58,11 +58,11 @@ Error GetKeyHandler(const Context& ctx, Response& resp) {
             .With("role", roleName));
     
     // 检查角色名是否有效
-    RoleName role;
+    std::string role;
     if (roleName == "timestamp") {
-        role = RoleName::TimestampRole;
+        role = TIMESTAMP_ROLE;
     } else if (roleName == "snapshot") {
-        role = RoleName::SnapshotRole;
+        role = SNAPSHOT_ROLE;
     } else {
         utils::GetLogger().Error("不支持的角色", 
             utils::LogContext().With("role", roleName));
@@ -220,17 +220,17 @@ Error AtomicUpdateHandler(const Context& ctx, Response& resp) {
             }
             
             // 确定角色类型
-            RoleName role;
+            std::string role;
             bool validRole = true;
             
             if (roleName == "root") {
-                role = RoleName::RootRole;
+                role = ROOT_ROLE;
             } else if (roleName == "targets" || roleName.find("targets/") == 0) {
-                role = RoleName::TargetsRole;
+                role = TARGETS_ROLE;
             } else if (roleName == "snapshot") {
-                role = RoleName::SnapshotRole;
+                role = SNAPSHOT_ROLE;
             } else if (roleName == "timestamp") {
-                role = RoleName::TimestampRole;
+                role = TIMESTAMP_ROLE;
             } else {
                 validRole = false;
             }
@@ -450,15 +450,15 @@ Error GetHandler(const Context& ctx, Response& resp) {
     }
     
     // 确定角色
-    RoleName role;
+    std::string role;
     if (tufRole == "root") {
-        role = RoleName::RootRole;
+        role = ROOT_ROLE;
     } else if (tufRole == "targets" || tufRole.find("targets/") == 0) {
-        role = RoleName::TargetsRole;
+        role = TARGETS_ROLE;
     } else if (tufRole == "snapshot") {
-        role = RoleName::SnapshotRole;
+        role = SNAPSHOT_ROLE;
     } else if (tufRole == "timestamp") {
-        role = RoleName::TimestampRole;
+        role = TIMESTAMP_ROLE;
     } else {
         utils::GetLogger().Error("不支持的角色", 
             utils::LogContext().With("role", tufRole));

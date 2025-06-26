@@ -117,7 +117,7 @@ public:
 
 // TUFRootData - 用于root角色变更的数据结构
 struct TUFRootData {
-    RoleName roleName;
+    std::string roleName;
     std::vector<std::shared_ptr<crypto::PublicKey>> keys;
     std::vector<uint8_t> Serialize() const;
     Error Deserialize(const std::vector<uint8_t>& data);

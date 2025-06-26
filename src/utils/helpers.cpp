@@ -10,22 +10,20 @@ namespace notary {
 namespace utils {
 
 // 获取角色的默认过期时间
-std::chrono::system_clock::time_point getDefaultExpiry(RoleName role) {
+std::chrono::system_clock::time_point getDefaultExpiry(const std::string& role) {
     auto now = std::chrono::system_clock::now();
-    switch (role) {
-        case RoleName::RootRole:
-            return now + std::chrono::hours(24 * 365 * 10); // 10年
-        case RoleName::TargetsRole:
-        case RoleName::SnapshotRole:
-            return now + std::chrono::hours(24 * 365 * 3);  // 3年
-        case RoleName::TimestampRole:
-            return now + std::chrono::hours(24 * 14);       // 14天
-        default:
-            return now + std::chrono::hours(24 * 365);      // 1年
+    if (role == ROOT_ROLE) {
+        return now + std::chrono::hours(24 * 365 * 10); // 10年
+    } else if (role == TARGETS_ROLE || role == SNAPSHOT_ROLE) {
+        return now + std::chrono::hours(24 * 365 * 3);  // 3年
+    } else if (role == TIMESTAMP_ROLE) {
+        return now + std::chrono::hours(24 * 14);       // 14天
+    } else {
+        return now + std::chrono::hours(24 * 365);      // 1年
     }
 }
 
-std::vector<uint8_t> serializeCanonicalRole(std::shared_ptr<tuf::Repo> tufRepo, RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& extraSigningKeys) {
+std::vector<uint8_t> serializeCanonicalRole(std::shared_ptr<tuf::Repo> tufRepo, const std::string& role, const std::vector<std::shared_ptr<crypto::PublicKey>>& extraSigningKeys) {
     if (!tufRepo) {
         return {};
     }
@@ -37,24 +35,15 @@ std::vector<uint8_t> serializeCanonicalRole(std::shared_ptr<tuf::Repo> tufRepo, 
         
         Result<std::shared_ptr<tuf::Signed>> result;
         // 根据角色类型进行签名
-        switch (role) {
-            case RoleName::RootRole: {
-                result = tufRepo->SignRoot(expires);
-                break;
-            }
-            case RoleName::SnapshotRole: {
-                result = tufRepo->SignSnapshot(expires);
-                break;
-            }
-            case RoleName::TargetsRole: {
-                result = tufRepo->SignTargets(role, expires);
-                break;
-            }
-            default: {
-                // 返回错误：不支持的role
-                result = Error("Unsupported role");
-                break;
-            }
+        if (role == ROOT_ROLE) {
+            result = tufRepo->SignRoot(expires);
+        } else if (role == SNAPSHOT_ROLE) {
+            result = tufRepo->SignSnapshot(expires);
+        } else if (role == TARGETS_ROLE) {
+            result = tufRepo->SignTargets(role, expires);
+        } else {
+            // 返回错误：不支持的role
+            result = Error("Unsupported role");
         }
         
         if (!result.ok()) {
@@ -105,7 +94,7 @@ Error applyChangelist(std::shared_ptr<tuf::Repo> repo,
             
             // 检查是否是委托角色 (对应Go的isDel := data.IsDelegation(c.Scope()) || data.IsWildDelegation(c.Scope()))
             std::string scope = change->Scope();
-            bool isDel = tuf::IsDelegation(stringToRole(scope)) || tuf::IsWildDelegation(stringToRole(scope));
+            bool isDel = tuf::IsDelegation(scope) || tuf::IsWildDelegation(scope);
             
             Error err;
             
@@ -158,7 +147,7 @@ Error applyTargetsChange(std::shared_ptr<tuf::Repo> repo,
     } else if (type == changelist::TypeTargetsDelegation) {
         return changeTargetsDelegation(repo, change);
     } else if (type == changelist::TypeWitness) {
-        return witnessTargets(repo, invalid, stringToRole(change->Scope()));
+        return witnessTargets(repo, invalid,change->Scope());
     } else {
         return Error("Only target meta and delegations changes supported");
     }
@@ -173,7 +162,7 @@ Error changeTargetMeta(std::shared_ptr<tuf::Repo> repo,
     
     std::string action = change->Action();
     std::string path = change->Path();
-    RoleName scope = stringToRole(change->Scope());
+     std::string scope = change->Scope();
     
     try {
         if (action == changelist::ActionCreate) {
@@ -272,18 +261,18 @@ Error applyRootRoleChange(std::shared_ptr<tuf::Repo> repo,
             }
             
             utils::GetLogger().Info("Applying root role change", utils::LogContext()
-                .With("role", roleToString(d.roleName))
+                .With("role", d.roleName)
                 .With("keyCount", std::to_string(d.keys.size())));
             
             // 直接调用repo的ReplaceBaseKeys方法 
             // (对应Go的return repo.ReplaceBaseKeys(d.RoleName, d.Keys...))
             auto err = repo->ReplaceBaseKeys(d.roleName, d.keys);
             if (!err.ok()) {
-                return Error("Failed to replace base keys for role " + roleToString(d.roleName) + ": " + err.what());
+                return Error("Failed to replace base keys for role " + d.roleName + ": " + err.what());
             }
             
             utils::GetLogger().Debug("Successfully replaced base keys", utils::LogContext()
-                .With("role", roleToString(d.roleName))
+                .With("role", d.roleName)
                 .With("keyCount", std::to_string(d.keys.size())));
             
             return Error(); // 成功
@@ -300,15 +289,15 @@ Error applyRootRoleChange(std::shared_ptr<tuf::Repo> repo,
 // witnessTargets函数实现 (对应Go的witnessTargets函数)
 Error witnessTargets(std::shared_ptr<tuf::Repo> repo, 
                         std::shared_ptr<tuf::Repo> invalid, 
-                        RoleName scope) {
+                        const std::string& scope) {
     // TODO: 实现witness逻辑
     // 这是一个复杂的功能，用于处理无效的目标见证
     return Error("Witness targets not yet implemented");
 }
 
 // 从角色列表中移除指定角色 (对应Go的RoleNameSliceRemove)
-std::vector<RoleName> roleNameSliceRemove(const std::vector<RoleName>& roles, RoleName roleToRemove) {
-    std::vector<RoleName> result;
+std::vector<std::string> roleNameSliceRemove(const std::vector<std::string>& roles, const std::string& roleToRemove) {
+    std::vector<std::string> result;
     result.reserve(roles.size());
     
     for (const auto& role : roles) {
@@ -352,11 +341,11 @@ Result<std::vector<std::shared_ptr<crypto::PrivateKey>>> getAllPrivKeys(
         std::string rootKeyID;
         
         // 3.1 获取现有的根密钥列表 (对应Go的rootKeyList := cryptoService.ListKeys(data.CanonicalRootRole))
-        std::vector<std::string> rootKeyList = cryptoService->ListKeys(RoleName::RootRole);
+        std::vector<std::string> rootKeyList = cryptoService->ListKeys(ROOT_ROLE);
         
         if (rootKeyList.empty()) {
             // 3.2 如果没有根密钥，创建一个新的ECDSA密钥 (对应Go的cryptoService.Create)
-            auto createResult = cryptoService->Create(RoleName::RootRole, "", ECDSA_KEY);
+            auto createResult = cryptoService->Create(ROOT_ROLE, "", ECDSA_KEY);
             if (!createResult.ok()) {
                 return Result<std::vector<std::shared_ptr<crypto::PrivateKey>>>(
                     createResult.error());
@@ -412,7 +401,7 @@ void warnRolesNearExpiry(const std::shared_ptr<tuf::Repo>& repo) {
         for (const auto& [role, signedTargets] : targetsMap) {
             // signedTargets是*data.SignedTargets类型
             if (signedTargets && nearExpiry(signedTargets->Signed.Common.Expires)) {
-                std::string roleStr = roleToString(role);
+                std::string roleStr = role;
                 utils::GetLogger().Warn(roleStr + " metadata is nearing expiry, you should re-sign the role metadata");
             }
         }
@@ -434,7 +423,7 @@ void warnRolesNearExpiry(const std::shared_ptr<tuf::Repo>& repo) {
 
 // rotateRemoteKey函数实现 - 对应Go版本的rotateRemoteKey函数
 // 在远程存储中轮转私钥并返回公钥组件
-Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(RoleName role, 
+Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(const std::string& role, 
                                                           std::shared_ptr<storage::RemoteStore> remoteStore,
                                                           const std::string& gun) {
     try {
@@ -444,7 +433,7 @@ Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(RoleName role,
         
         utils::GetLogger().Info("Requesting remote key rotation", 
             utils::LogContext()
-                .With("role", roleToString(role))
+                .With("role", role)
                 .With("gun", gun));
         
         // 发送密钥轮转请求到远程服务器 (对应Go的rawPubKey, err := remote.RotateKey(role))
@@ -455,7 +444,7 @@ Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(RoleName role,
         }
         
         // 将角色名转换为字符串
-        std::string roleStr = roleToString(role);
+        std::string roleStr = role;
         auto rawPubKeyResult = httpStore->RotateKey(roleStr);
         if (!rawPubKeyResult.ok()) {
             return Error("Failed to rotate remote key for role " + roleStr + ": " + rawPubKeyResult.error().what());
@@ -466,7 +455,7 @@ Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(RoleName role,
         
         utils::GetLogger().Debug("Received raw public key from server", 
             utils::LogContext()
-                .With("role", roleToString(role))
+                .With("role", role)
                 .With("dataSize", std::to_string(rawPubKey.size())));
         
         // 使用UnmarshalPublicKey解析公钥数据 (对应Go的pubKey, err := data.UnmarshalPublicKey(rawPubKey))
@@ -482,7 +471,7 @@ Result<std::shared_ptr<crypto::PublicKey>> rotateRemoteKey(RoleName role,
         
         utils::GetLogger().Info("Successfully rotated remote key", 
             utils::LogContext()
-                .With("role", roleToString(role))
+                .With("role", role)
                 .With("newKeyID", pubKey->ID())
                 .With("algorithm", pubKey->Algorithm())
                 .With("gun", gun));

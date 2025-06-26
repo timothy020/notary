@@ -64,7 +64,7 @@ std::vector<uint8_t> ecKeyToDER(EC_KEY* key, bool isPrivate) {
 
 } // namespace
 
-Result<std::shared_ptr<PublicKey>> CryptoService::Create(RoleName role, 
+Result<std::shared_ptr<PublicKey>> CryptoService::Create(const std::string& role, 
                                                         const std::string& gun, 
                                                         const std::string& algorithm) {
     // RSA密钥只能导入，不能生成
@@ -89,7 +89,7 @@ Result<std::shared_ptr<PublicKey>> CryptoService::Create(RoleName role,
     return Result<std::shared_ptr<PublicKey>>(privateKey->GetPublicKey());
 }
 
-Result<std::tuple<std::shared_ptr<PrivateKey>, RoleName>> CryptoService::GetPrivateKey(const std::string& keyID) {
+Result<std::tuple<std::shared_ptr<PrivateKey>, std::string>> CryptoService::GetPrivateKey(const std::string& keyID) {
     // 遍历所有密钥存储
     for (auto& keyStore : keyStores_) {
         auto result = keyStore->GetKey(keyID);
@@ -99,7 +99,7 @@ Result<std::tuple<std::shared_ptr<PrivateKey>, RoleName>> CryptoService::GetPriv
         // 如果是密码错误或尝试次数超限，直接返回
         // 其他错误继续尝试下一个存储
     }
-    return Result<std::tuple<std::shared_ptr<PrivateKey>, RoleName>>(Error("Key not found in any keystore"));
+    return Result<std::tuple<std::shared_ptr<PrivateKey>, std::string>>(Error("Key not found in any keystore"));
 }
 
 std::shared_ptr<PublicKey> CryptoService::GetKey(const std::string& keyID) {
@@ -124,13 +124,13 @@ Result<storage::KeyInfo> CryptoService::GetKeyInfo(const std::string& keyID) {
     return Result<storage::KeyInfo>(Error("could not find info for keyID " + keyID));
 }
 
-Error CryptoService::AddKey(RoleName role, const std::string& gun, std::shared_ptr<PrivateKey> key) {
+Error CryptoService::AddKey(const std::string&role, const std::string& gun, std::shared_ptr<PrivateKey> key) {
     // 首先检查密钥是否已存在于任何keyStore中
     for (auto& keyStore : keyStores_) {
         auto existingKeyInfo = keyStore->GetKeyInfo(key->ID());
         if (existingKeyInfo.ok()) {
             if (existingKeyInfo.value().role != role) {
-                return Error("key with same ID already exists for role: " + roleToString(existingKeyInfo.value().role));
+                return Error("key with same ID already exists for role: " + existingKeyInfo.value().role);
             }
             // 密钥已存在且角色相同，直接返回成功
             return Error(); // 成功
@@ -157,7 +157,7 @@ Error CryptoService::RemoveKey(const std::string& keyID) {
     return Error(); // 成功
 }
 
-std::vector<std::string> CryptoService::ListKeys(RoleName role) {
+std::vector<std::string> CryptoService::ListKeys(const std::string& role) {
     std::vector<std::string> result;
     
     // 遍历所有keyStore
@@ -175,8 +175,8 @@ std::vector<std::string> CryptoService::ListKeys(RoleName role) {
     return result;
 }
 
-std::map<std::string, RoleName> CryptoService::ListAllKeys() {
-    std::map<std::string, RoleName> result;
+std::map<std::string, std::string> CryptoService::ListAllKeys() {
+    std::map<std::string, std::string> result;
     
     // 遍历所有keyStore
     for (auto& keyStore : keyStores_) {

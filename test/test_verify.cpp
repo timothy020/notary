@@ -24,12 +24,12 @@
         
 //         // 测试未过期的情况
 //         signedCommon.Expires = std::chrono::system_clock::now() + std::chrono::hours(1);
-//         Error err = VerifyExpiry(signedCommon, notary::RoleName::RootRole);
+//         Error err = VerifyExpiry(signedCommon, notary::ROOT_ROLE);
 //         REQUIRE_FALSE(err.hasError());
         
 //         // 测试已过期的情况
 //         signedCommon.Expires = std::chrono::system_clock::now() - std::chrono::hours(1);
-//         err = VerifyExpiry(signedCommon, notary::RoleName::RootRole);
+//         err = VerifyExpiry(signedCommon, notary::ROOT_ROLE);
 //         REQUIRE(err.hasError());
 //         REQUIRE(err.what().find("expired") != std::string::npos);
 //     }
@@ -71,7 +71,7 @@
 //         // 不添加任何签名
         
 //         BaseRole role;
-//         role.SetName(notary::RoleName::RootRole);
+//         role.SetName(notary::ROOT_ROLE);
 //         role.SetThreshold(1);
         
 //         Error err = VerifySignatures(signedData, role);
@@ -87,7 +87,7 @@
 //         signedData.Signatures.push_back(sig);
         
 //         BaseRole role;
-//         role.SetName(notary::RoleName::RootRole);
+//         role.SetName(notary::ROOT_ROLE);
 //         role.SetThreshold(0); // 无效阈值
         
 //         Error err = VerifySignatures(signedData, role);

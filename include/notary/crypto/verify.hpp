@@ -21,17 +21,17 @@ extern const std::string ErrWrongType;
 // 签名验证错误类型
 class ErrExpired : public std::exception {
 public:
-    ErrExpired(RoleName role, const std::string& expired) 
+    ErrExpired(const std::string& role, const std::string& expired) 
         : role_(role), expired_(expired) {
-        message_ = "TUF metadata for " + roleToString(role) + " expired on " + expired;
+        message_ = "TUF metadata for " + role + " expired on " + expired;
     }
     
     const char* what() const noexcept override { return message_.c_str(); }
-    RoleName getRole() const { return role_; }
+    const std::string& getRole() const { return role_; }
     const std::string& getExpired() const { return expired_; }
     
 private:
-    RoleName role_;
+    const std::string& role_;
     std::string expired_;
     std::string message_;
 };
@@ -78,7 +78,7 @@ public:
 bool IsExpired(const std::chrono::time_point<std::chrono::system_clock>& t);
 
 // 过期时间验证
-Error VerifyExpiry(const notary::tuf::SignedCommon& s, RoleName role);
+Error VerifyExpiry(const notary::tuf::SignedCommon& s, const std::string& role);
 
 // 版本验证
 Error VerifyVersion(const notary::tuf::SignedCommon& s, int minVersion);

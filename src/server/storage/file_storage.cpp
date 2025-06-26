@@ -112,7 +112,7 @@ Result<Metadata> FileStorageService::GetMetadata(const MetadataRequest& request)
     }
 }
 
-Result<bool> FileStorageService::StoreMetadata(const std::string& gun, RoleName role, 
+Result<bool> FileStorageService::StoreMetadata(const std::string& gun, const std::string& role, 
                                       const std::string& roleName, const std::string& data) {
     std::lock_guard<std::mutex> lock(mutex_);
     

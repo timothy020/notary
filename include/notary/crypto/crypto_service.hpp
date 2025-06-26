@@ -30,12 +30,12 @@ public:
     
     
     // 创建新密钥
-    Result<std::shared_ptr<PublicKey>> Create(RoleName role, 
+    Result<std::shared_ptr<PublicKey>> Create(const std::string& role, 
                                             const std::string& gun, 
                                             const std::string& algorithm);
     
     // 获取私钥（返回私钥和角色）
-    Result<std::tuple<std::shared_ptr<PrivateKey>, RoleName>> GetPrivateKey(const std::string& keyID);
+    Result<std::tuple<std::shared_ptr<PrivateKey>, std::string>> GetPrivateKey(const std::string& keyID);
     
     // 获取公钥
     std::shared_ptr<PublicKey> GetKey(const std::string& keyID);
@@ -44,16 +44,16 @@ public:
     Result<storage::KeyInfo> GetKeyInfo(const std::string& keyID);
     
     // 添加密钥
-    Error AddKey(RoleName role, const std::string& gun, std::shared_ptr<PrivateKey> key);
+    Error AddKey(const std::string& role, const std::string& gun, std::shared_ptr<PrivateKey> key);
     
     // 删除密钥
     Error RemoveKey(const std::string& keyID);
     
     // 列出指定角色的所有密钥
-    std::vector<std::string> ListKeys(RoleName role);
+    std::vector<std::string> ListKeys(const std::string& role);
     
     // 列出所有密钥
-    std::map<std::string, RoleName> ListAllKeys();
+    std::map<std::string, std::string> ListAllKeys();
     
     // 检查根密钥是否加密（静态方法）
     static Error CheckRootKeyIsEncrypted(const std::vector<uint8_t>& pemBytes);

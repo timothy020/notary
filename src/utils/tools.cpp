@@ -346,7 +346,7 @@ std::string ConvertPrivateKeyToPKCS8(
 }
 
 // 从PEM数据中提取私钥属性（角色和GUN）
-std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
+std::tuple<std::string, std::string, Error> extractPrivateKeyAttributes(
     const std::vector<uint8_t>& pemBytes, 
     bool fips) {
     
@@ -357,7 +357,7 @@ std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
     size_t endHeaderPos = pemStr.find("-----", beginPos + 11);
     
     if (beginPos == std::string::npos || endHeaderPos == std::string::npos) {
-        return std::make_tuple(RoleName::TargetsRole, "", Error("PEM block is empty"));
+        return std::make_tuple(TARGETS_ROLE, "", Error("PEM block is empty"));
     }
     
     // 提取块类型
@@ -368,7 +368,7 @@ std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
         if (blockType == "RSA PRIVATE KEY" || 
             blockType == "EC PRIVATE KEY" || 
             blockType == "ED25519 PRIVATE KEY") {
-            return std::make_tuple(RoleName::TargetsRole, "", 
+            return std::make_tuple(TARGETS_ROLE, "", 
                 Error(blockType + " not supported in FIPS mode"));
         }
     }
@@ -379,7 +379,7 @@ std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
         blockType != "ED25519 PRIVATE KEY" &&
         blockType != "PRIVATE KEY" && 
         blockType != "ENCRYPTED PRIVATE KEY") {
-        return std::make_tuple(RoleName::TargetsRole, "", Error("unknown key format"));
+        return std::make_tuple(TARGETS_ROLE, "", Error("unknown key format"));
     }
     
     // 查找头部信息（在第一行-----END之后到空行之前）
@@ -391,11 +391,11 @@ std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
         if (dataStart != std::string::npos && 
             pemStr.substr(dataStart + 1, 5) != "-----") {
             // 没有头部信息，直接是数据
-            return std::make_tuple(RoleName::TargetsRole, "", Error());
+            return std::make_tuple(TARGETS_ROLE, "", Error());
         }
     }
     
-    RoleName role = RoleName::TargetsRole;
+    std::string role = TARGETS_ROLE;
     std::string gun = "";
     
     if (dataStart != std::string::npos && dataStart > headerStart) {
@@ -420,7 +420,7 @@ std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
                 value.erase(value.find_last_not_of(" \t") + 1);
                 
                 if (key == "role") {
-                    role = stringToRole(value);
+                    role = value;
                 } else if (key == "gun") {
                     gun = value;
                 }
@@ -730,17 +730,17 @@ std::string cleanPath(const std::string& path) {
 }
 
 // 辅助函数：获取父角色 (对应Go的role.Parent())
-RoleName getParentRole(RoleName role) {
-    std::string strRole = roleToString(role);
+std::string getParentRole(const std::string& role) {
+    std::string strRole = role;
     size_t lastSlash = strRole.find_last_of('/');
     
     if (lastSlash == std::string::npos) {
         // 没有找到斜杠，返回空角色或根角色
-        return RoleName::RootRole; // 或者可以定义一个空角色
+        return ROOT_ROLE; // 或者可以定义一个空角色
     }
     
     std::string parentStr = strRole.substr(0, lastSlash);
-    return stringToRole(parentStr);
+    return parentStr;
 }
 }
 }

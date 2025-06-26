@@ -33,7 +33,7 @@ struct Metadata {
 // 元数据请求结构
 struct MetadataRequest {
     std::string gun;        // GUN名称
-    RoleName role;          // 角色
+    std::string role;          // 角色
     std::string roleName;   // 原始角色名（用于delegation处理）
     std::string checksum;   // 校验和（可选）
     int version = 0;        // 版本号（可选，0表示最新）
@@ -48,7 +48,7 @@ public:
     virtual Result<Metadata> GetMetadata(const MetadataRequest& request) = 0;
     
     // 存储元数据
-    virtual Result<bool> StoreMetadata(const std::string& gun, RoleName role, 
+    virtual Result<bool> StoreMetadata(const std::string& gun, const std::string& role, 
                                const std::string& roleName, const std::string& data) = 0;
     
     // 删除GUN相关的所有元数据

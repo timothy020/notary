@@ -51,7 +51,7 @@ std::string ConvertPrivateKeyToPKCS8(
 );
 
 // 从PEM数据中提取私钥属性（角色和GUN）
-std::tuple<RoleName, std::string, Error> extractPrivateKeyAttributes(
+std::tuple<std::string, std::string, Error> extractPrivateKeyAttributes(
     const std::vector<uint8_t>& pemBytes, 
     bool fips = false
 );
@@ -84,7 +84,7 @@ Result<std::shared_ptr<crypto::PrivateKey>> ParsePKCS8ToTufKey(
 Result<std::shared_ptr<crypto::PrivateKey>> convertEVPKeyToTufKey(EVP_PKEY* evpKey);
 
 // 获取父角色
-RoleName getParentRole(RoleName role);
+std::string getParentRole(const std::string& role);
 // 清理路径
 std::string cleanPath(const std::string& path);
 

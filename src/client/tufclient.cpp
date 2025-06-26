@@ -84,13 +84,13 @@ Result<std::tuple<std::shared_ptr<tuf::Repo>, std::shared_ptr<tuf::Repo>>> TUFCl
 Result<std::vector<uint8_t>> TUFClient::tryLoadCacheThenRemote(const tuf::ConsistentInfo& consistentInfo) {
     // 1. 步骤一：先在自己的书架上找书
     // 尝试从本地缓存中，根据索引卡上的信息(角色名和预期大小)来获取书籍内容
-    auto cachedResult = cache_->GetSized(roleToString(consistentInfo.getRoleName()), consistentInfo.length());
+    auto cachedResult = cache_->GetSized(consistentInfo.getRoleName(), consistentInfo.length());
     
     // 2. 步骤二：如果书架上没有这本书(缓存未命中)
     if (!cachedResult.ok()) {
         // 直接告诉远程助理："我的书架上没有这本书，你去中央图书馆帮我拿一本新的。"
         // 空的vector表示我们手头没有任何旧版本可以参考
-        utils::GetLogger().Info("no " + roleToString(consistentInfo.getRoleName()) + " in cache, must download");
+        utils::GetLogger().Info("no " + consistentInfo.getRoleName() + " in cache, must download");
         return tryLoadRemote(consistentInfo, std::vector<uint8_t>());
     }
     
@@ -104,13 +104,13 @@ Result<std::vector<uint8_t>> TUFClient::tryLoadCacheThenRemote(const tuf::Consis
     if (loadErr.ok()) {
         // 如果验证通过，太好了！这本书是好的
         // 直接返回这本书的内容，无需联系中央图书馆，任务完成
-        utils::GetLogger().Info("successfully verified cached " + roleToString(consistentInfo.getRoleName()));
+        utils::GetLogger().Info("successfully verified cached " + consistentInfo.getRoleName());
         return Result<std::vector<uint8_t>>(cachedData);
     }
     
     // 4. 步骤四：如果书架上的书已经过时或损坏(验证失败)
     // 记录一条日志，说明本地的这本书不行了
-    utils::GetLogger().Info("cached " + roleToString(consistentInfo.getRoleName()) + " is invalid (must download): " + loadErr.what());
+    utils::GetLogger().Info("cached " + consistentInfo.getRoleName() + " is invalid (must download): " + loadErr.what());
     
     // 告诉远程助理："我书架上这本书有问题，你去中央图书馆帮我拿一本新的。
     // 为了防止他们给我一本更旧的，我把这本有问题的书也给你，你参考一下它的版本号。"
@@ -163,10 +163,10 @@ Result<std::vector<uint8_t>> TUFClient::tryLoadRemote(const tuf::ConsistentInfo&
     utils::GetLogger().Debug("successfully verified downloaded " + consistentName);
     
     // 将这本验证通过的新书，放到自己的书架上（写入缓存），以便下次使用
-    auto cacheErr = cache_->Set(roleToString(consistentInfo.getRoleName()), rawData);
+    auto cacheErr = cache_->Set(consistentInfo.getRoleName(), rawData);
     if (!cacheErr.ok()) {
         // 即使写入缓存失败，也只是记录一条日志，不影响本次成功的结果
-        utils::GetLogger().Debug("Unable to write " + roleToString(consistentInfo.getRoleName()) + " to cache: " + cacheErr.what());
+        utils::GetLogger().Debug("Unable to write " + consistentInfo.getRoleName() + " to cache: " + cacheErr.what());
     }
     
     // 返回这本全新的、可信的书
@@ -179,8 +179,7 @@ Result<std::vector<uint8_t>> TUFClient::tryLoadRemote(const tuf::ConsistentInfo&
 Error TUFClient::downloadTimestamp() {
     utils::GetLogger().Debug("Loading timestamp...");
     
-    RoleName role = RoleName::TimestampRole;
-    auto consistentInfo = newBuilder_->getConsistentInfo(role);
+    auto consistentInfo = newBuilder_->getConsistentInfo(TIMESTAMP_ROLE);
     
     // 总是获取远程时间戳，因为它优于本地时间戳
     auto cachedResult = cache_->GetSized(TIMESTAMP_ROLE, MAX_TIMESTAMP_SIZE);
@@ -225,7 +224,7 @@ Error TUFClient::downloadTimestamp() {
     utils::GetLogger().Warn("Error while downloading remote metadata, using cached timestamp - this might not be the latest version available remotely");
     
     // 使用缓存的时间戳
-    auto loadErr = newBuilder_->load(role, cachedTS, 1, false);
+    auto loadErr = newBuilder_->load(TIMESTAMP_ROLE, cachedTS, 1, false);
     if (loadErr.ok()) {
         utils::GetLogger().Debug("successfully verified cached timestamp");
     }
@@ -238,8 +237,7 @@ Error TUFClient::downloadTimestamp() {
 Error TUFClient::downloadSnapshot() {
     utils::GetLogger().Debug("Loading snapshot...");
     
-    RoleName role = RoleName::SnapshotRole;
-    auto consistentInfo = newBuilder_->getConsistentInfo(role);
+    auto consistentInfo = newBuilder_->getConsistentInfo(SNAPSHOT_ROLE);
     
     // 快照元数据使用标准的"先缓存后远程"策略
     // 与时间戳不同，快照可以优先使用缓存
@@ -256,7 +254,7 @@ Error TUFClient::downloadSnapshot() {
 // 对应Go版本的getTargetsFile方法
 Result<std::vector<tuf::DelegationRole>> TUFClient::getTargetsFile(const tuf::DelegationRole& role, 
                                                                    const tuf::ConsistentInfo& consistentInfo) {
-    utils::GetLogger().Debug("Loading " + roleToString(role.Name) + "...");
+    utils::GetLogger().Debug("Loading " + consistentInfo.getRoleName() + "...");
     
     // 使用标准的缓存优先策略下载targets文件
     auto rawResult = tryLoadCacheThenRemote(consistentInfo);
@@ -298,7 +296,7 @@ Error TUFClient::downloadTargets() {
     
     // 创建根targets角色 - 对应Go版本的data.DelegationRole
     tuf::DelegationRole rootTargets;
-    rootTargets.Name = RoleName::TargetsRole;
+    rootTargets.Name = TARGETS_ROLE;
     rootTargets.Paths = {""};  // 空路径表示根targets
     
     toDownload.push_back(rootTargets);
@@ -314,7 +312,7 @@ Error TUFClient::downloadTargets() {
         
         // 检查是否有该角色的校验和信息
         if (!consistentInfo.checksumKnown()) {
-            utils::GetLogger().Debug("skipping " + roleToString(role.Name) + " because there is no checksum for it");
+            utils::GetLogger().Debug("skipping " + role.Name + " because there is no checksum for it");
             continue;
         }
         
@@ -334,11 +332,11 @@ Error TUFClient::downloadTargets() {
             
             if (isExpiredOrThreshold) {
                 // 如果是根targets角色出现过期或阈值错误，必须返回错误
-                if (role.Name == RoleName::TargetsRole) {
+                if (role.Name == TARGETS_ROLE) {
                     return err;
                 }
                 // 对于委托角色，只是警告并继续
-                utils::GetLogger().Warn("Error getting " + roleToString(role.Name) + ": " + err.what());
+                utils::GetLogger().Warn("Error getting " + role.Name + ": " + err.what());
             } else {
                 // 其他类型的错误直接返回
                 return err;
@@ -359,8 +357,7 @@ Error TUFClient::downloadTargets() {
 Result<std::vector<uint8_t>> TUFClient::downloadRoot() {
     utils::GetLogger().Debug("Loading root...");
     
-    RoleName role = RoleName::RootRole;
-    auto consistentInfo = newBuilder_->getConsistentInfo(role);
+    auto consistentInfo = newBuilder_->getConsistentInfo(ROOT_ROLE);
     
     // 我们不能在没有校验和的情况下读取root元数据的确切大小，
     // 因为这可能导致陷入TUF更新循环中，
@@ -423,7 +420,7 @@ Error TUFClient::updateRootVersions(int fromVersion, int toVersion) {
 // 检查是否有更新的root版本，并下载所有中间root文件以支持密钥轮转
 Error TUFClient::updateRoot() {
     // 获取当前root版本
-    auto currentRootConsistentInfo = oldBuilder_->getConsistentInfo(RoleName::RootRole);
+    auto currentRootConsistentInfo = oldBuilder_->getConsistentInfo(ROOT_ROLE);
     int currentVersion = oldBuilder_->getLoadedVersion(currentRootConsistentInfo.getRoleName());
     
     // 获取最新的root版本
@@ -575,7 +572,7 @@ Result<std::unique_ptr<TUFClient>> bootstrapClient(const TUFLoadOptions& options
         utils::GetLogger().Info("cachedRootResult success");
         
         // 如果无法加载缓存的root，硬失败，因为这是我们锚定信任的方式
-        auto loadOldErr = oldBuilder->load(RoleName::RootRole, rootJSON, minVersion, true);
+        auto loadOldErr = oldBuilder->load(ROOT_ROLE, rootJSON, minVersion, true);
         if (!loadOldErr.ok()) {
             return Result<std::unique_ptr<TUFClient>>(loadOldErr);
         }
@@ -583,15 +580,15 @@ Result<std::unique_ptr<TUFClient>> bootstrapClient(const TUFLoadOptions& options
         // 重置newBuilder，使用空的信任锚定配置，校验缓存root的有效期
         newBuilder = tuf::NewRepoBuilder(options.GUN, options.CryptoService, emptyTrustPin);
         
-        auto loadNewErr = newBuilder->load(RoleName::RootRole, rootJSON, minVersion, false);
+        auto loadNewErr = newBuilder->load(ROOT_ROLE, rootJSON, minVersion, false);
         if (!loadNewErr.ok()) {
             // 好的，旧root已过期 - 我们想下载新的。但我们想使用旧root来验证新root，
             // 所以使用旧构建器引导新构建器，但使用信任锚定来验证新root
-            minVersion = oldBuilder->getLoadedVersion(RoleName::RootRole);
+            minVersion = oldBuilder->getLoadedVersion(ROOT_ROLE);
             newBuilder = oldBuilder->bootstrapNewBuilderWithNewTrustpin(options.TrustPinning);
         }
     }
-    if (!newBuilder->isLoaded(RoleName::RootRole) || options.AlwaysCheckInitialized) {
+    if (!newBuilder->isLoaded(ROOT_ROLE) || options.AlwaysCheckInitialized) {
         // remoteErr为nil且我们无法从缓存加载root，或者特别检查仓库的初始化。
         
         // 如果远程存储成功设置，尝试从远程获取root
@@ -605,9 +602,9 @@ Result<std::unique_ptr<TUFClient>> bootstrapClient(const TUFLoadOptions& options
         
         auto tmpJSON = tmpJSONResult.value();
         
-        if (!newBuilder->isLoaded(RoleName::RootRole)) {
+        if (!newBuilder->isLoaded(ROOT_ROLE)) {
             // 如果无法从缓存加载，我们总是想使用下载的root
-            auto loadErr = newBuilder->load(RoleName::RootRole, tmpJSON, minVersion, false);
+            auto loadErr = newBuilder->load(ROOT_ROLE, tmpJSON, minVersion, false);
             if (!loadErr.ok()) {
                 return Result<std::unique_ptr<TUFClient>>(loadErr);
             }
@@ -621,7 +618,7 @@ Result<std::unique_ptr<TUFClient>> bootstrapClient(const TUFLoadOptions& options
     }
     
     // 我们只有在remoteErr != nil（因此我们不下载任何新root）且磁盘上没有root时才能到达这里
-    if (!newBuilder->isLoaded(RoleName::RootRole)) {
+    if (!newBuilder->isLoaded(ROOT_ROLE)) {
         return Result<std::unique_ptr<TUFClient>>(
             Error("Repository not initialized")
         );

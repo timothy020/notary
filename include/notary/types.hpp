@@ -76,51 +76,51 @@ const std::string TARGETS_ROLE = "targets";
 const std::string SNAPSHOT_ROLE = "snapshot";
 const std::string TIMESTAMP_ROLE = "timestamp";
 
-// 角色名称
-enum class RoleName {
-    RootRole,
-    TargetsRole,
-    SnapshotRole,
-    TimestampRole
-};
+// // 角色名称
+// enum class RoleName {
+//     RootRole,
+//     TargetsRole,
+//     SnapshotRole,
+//     TimestampRole
+// };
 
-// 角色名称转换函数
-inline std::string roleToString(RoleName role) {
-    switch (role) {
-        case RoleName::RootRole: return ROOT_ROLE;
-        case RoleName::TargetsRole: return TARGETS_ROLE;
-        case RoleName::SnapshotRole: return SNAPSHOT_ROLE;
-        case RoleName::TimestampRole: return TIMESTAMP_ROLE;
-        default: return "unknown";
-    }
-}
+// // 角色名称转换函数
+// inline std::string roleToString(const std::string& role) {
+//     switch (role) {
+//         case ROOT_ROLE: return ROOT_ROLE;
+//         case TARGETS_ROLE: return TARGETS_ROLE;
+//         case SNAPSHOT_ROLE: return SNAPSHOT_ROLE;
+//         case TIMESTAMP_ROLE: return TIMESTAMP_ROLE;
+//         default: return "unknown";
+//     }
+// }
 
-inline RoleName stringToRole(const std::string& roleStr) {
-    if (roleStr == ROOT_ROLE) return RoleName::RootRole;
-    if (roleStr == TARGETS_ROLE) return RoleName::TargetsRole;
-    if (roleStr == SNAPSHOT_ROLE) return RoleName::SnapshotRole;
-    if (roleStr == TIMESTAMP_ROLE) return RoleName::TimestampRole;
-    return RoleName::TargetsRole; // 默认值
-}
+// inline RoleName stringToRole(const std::string& roleStr) {
+//     if (roleStr == ROOT_ROLE) return ROOT_ROLE;
+//     if (roleStr == TARGETS_ROLE) return TARGETS_ROLE;
+//     if (roleStr == SNAPSHOT_ROLE) return SNAPSHOT_ROLE;
+//     if (roleStr == TIMESTAMP_ROLE) return TIMESTAMP_ROLE;
+//     return TARGETS_ROLE; // 默认值
+// }
 
 
 // 基础角色
 class BaseRole {
 public:
     // 默认构造函数 - 为了满足std::map的要求
-    BaseRole() : name_(RoleName::RootRole), threshold_(0) {}
+    BaseRole() : name_(ROOT_ROLE), threshold_(0) {}
     
     // 完整构造函数
-    BaseRole(RoleName name, int threshold, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys)
+    BaseRole(const std::string& name, int threshold, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys)
         : name_(name), threshold_(threshold), keys_(keys) {}
     
-    RoleName Name() const { return name_; }
+    const std::string&  Name() const { return name_; }
     int Threshold() const { return threshold_; }
     const std::vector<std::shared_ptr<crypto::PublicKey>>& Keys() const { return keys_; }
     std::vector<std::shared_ptr<crypto::PublicKey>>& Keys() { return keys_; }
     
     // 添加设置方法
-    void SetName(RoleName name) { name_ = name; }
+    void SetName(const std::string&  name) { name_ = name; }
     void SetThreshold(int threshold) { threshold_ = threshold; }
     void SetKeys(const std::vector<std::shared_ptr<crypto::PublicKey>>& keys) { keys_ = keys; }
     
@@ -128,7 +128,7 @@ public:
     bool Equals(const BaseRole& other) const;
     
 private:
-    RoleName name_;
+    std::string name_;
     int threshold_;
     std::vector<std::shared_ptr<crypto::PublicKey>> keys_; // TODO: 需要修改为map
 };

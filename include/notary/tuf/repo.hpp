@@ -99,7 +99,7 @@ public:
     
     BaseRole BaseRoleInfo;
     std::vector<std::string> Paths;
-    RoleName Name;
+    std::string Name;
     
     bool CheckPaths(const std::string& path) const;
     
@@ -139,7 +139,7 @@ struct Signed {
 struct Root {
     SignedCommon Common;
     std::map<std::string, std::shared_ptr<crypto::PublicKey>> Keys;
-    std::map<RoleName, BaseRole> Roles;
+    std::map<std::string, BaseRole> Roles;
     bool ConsistentSnapshot = false;
     
     // JSON 序列化支持
@@ -194,7 +194,7 @@ public:
     Result<std::shared_ptr<notary::tuf::Signed>> ToSigned() const;
     
     // Root特有方法
-    Result<BaseRole> BuildBaseRole(RoleName roleName) const;
+    Result<BaseRole> BuildBaseRole(const std::string& roleName) const;
 };
 
 // 签名的Targets元数据（对应Go的SignedTargets结构体）
@@ -219,7 +219,7 @@ public:
     FileMeta* GetMeta(const std::string& path);
     void AddTarget(const std::string& path, const FileMeta& meta);
     std::vector<DelegationRole> GetValidDelegations(const DelegationRole& parent) const;
-    Result<DelegationRole> BuildDelegationRole(RoleName roleName) const;
+    Result<DelegationRole> BuildDelegationRole(const std::string& roleName) const;
     
 private:
     // 辅助方法：构建所有委托角色
@@ -245,9 +245,9 @@ public:
     Result<std::shared_ptr<notary::tuf::Signed>> ToSigned() const;
     
     // Snapshot特有方法
-    void AddMeta(RoleName role, const FileMeta& meta);
-    Result<FileMeta> GetMeta(RoleName role) const;
-    void DeleteMeta(RoleName role);
+    void AddMeta(const std::string& role, const FileMeta& meta);
+    Result<FileMeta> GetMeta(const std::string& role) const;
+    void DeleteMeta(const std::string& role);
 };
 
 // 签名的Timestamp元数据（对应Go的SignedTimestamp结构体）
@@ -292,10 +292,10 @@ public:
     std::shared_ptr<SignedRoot> GetRoot() const { return root_; }
     void SetRoot(std::shared_ptr<SignedRoot> root) { root_ = root; }
     
-    std::shared_ptr<SignedTargets> GetTargets(RoleName role) const;
-    void SetTargets(std::shared_ptr<SignedTargets> targets, RoleName role = RoleName::TargetsRole);
-    std::map<RoleName, std::shared_ptr<SignedTargets>>& GetTargets() { return targets_; }
-    void SetTargets(std::map<RoleName, std::shared_ptr<SignedTargets>> targets) { targets_ = targets; }
+    std::shared_ptr<SignedTargets> GetTargets(const std::string& role) const;
+    void SetTargets(std::shared_ptr<SignedTargets> targets, const std::string& role = TARGETS_ROLE);
+    std::map<std::string, std::shared_ptr<SignedTargets>>& GetTargets() { return targets_; }
+    void SetTargets(std::map<std::string, std::shared_ptr<SignedTargets>> targets) { targets_ = targets; }
     
     std::shared_ptr<SignedSnapshot> GetSnapshot() const { return snapshot_; }
     void SetSnapshot(std::shared_ptr<SignedSnapshot> snapshot) { snapshot_ = snapshot; }
@@ -311,54 +311,54 @@ public:
     Result<std::shared_ptr<SignedRoot>> InitRoot(const BaseRole& root, const BaseRole& targets, 
                   const BaseRole& snapshot, const BaseRole& timestamp);
     
-    Result<std::shared_ptr<SignedTargets>> InitTargets(RoleName role = RoleName::TargetsRole);
+    Result<std::shared_ptr<SignedTargets>> InitTargets(const std::string& role = TARGETS_ROLE);
     Result<std::shared_ptr<SignedSnapshot>> InitSnapshot();
     Result<std::shared_ptr<SignedTimestamp>> InitTimestamp();
     
     // 签名方法
     Result<std::shared_ptr<Signed>> SignRoot(const std::chrono::time_point<std::chrono::system_clock>& expires);
-    Result<std::shared_ptr<Signed>> SignTargets(RoleName role, const std::chrono::time_point<std::chrono::system_clock>& expires);
+    Result<std::shared_ptr<Signed>> SignTargets(const std::string& role, const std::chrono::time_point<std::chrono::system_clock>& expires);
     Result<std::shared_ptr<Signed>> SignSnapshot(const std::chrono::time_point<std::chrono::system_clock>& expires);
     Result<std::shared_ptr<Signed>> SignTimestamp(const std::chrono::time_point<std::chrono::system_clock>& expires);
     
     // 批量目标管理
-    Error AddTargets(RoleName role, const std::map<std::string, FileMeta>& targets);
-    Error RemoveTargets(RoleName role, const std::vector<std::string>& targets);
+    Error AddTargets(const std::string& role, const std::map<std::string, FileMeta>& targets);
+    Error RemoveTargets(const std::string& role, const std::vector<std::string>& targets);
     
     // 密钥管理
-    Error AddBaseKeys(RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys);
-    Error ReplaceBaseKeys(RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys);
-    Error RemoveBaseKeys(RoleName role, const std::vector<std::string>& keyIDs);
+    Error AddBaseKeys(const std::string& role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys);
+    Error ReplaceBaseKeys(const std::string& role, const std::vector<std::shared_ptr<crypto::PublicKey>>& keys);
+    Error RemoveBaseKeys(const std::string& role, const std::vector<std::string>& keyIDs);
     
     // 角色管理
-    Result<BaseRole> GetBaseRole(RoleName name) const;
-    Result<DelegationRole> GetDelegationRole(RoleName name) const;
+    Result<BaseRole> GetBaseRole(const std::string& name) const;
+    Result<DelegationRole> GetDelegationRole(const std::string& name) const;
     std::vector<BaseRole> GetAllLoadedRoles() const;
     
     // 委托管理
-    Error UpdateDelegationKeys(RoleName roleName, const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys, 
+    Error UpdateDelegationKeys(const std::string& roleName, const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys, 
                               const std::vector<std::string>& removeKeys, int newThreshold);
-    Error PurgeDelegationKeys(RoleName role, const std::vector<std::string>& removeKeys);
-    Error UpdateDelegationPaths(RoleName roleName, const std::vector<std::string>& addPaths, 
+    Error PurgeDelegationKeys(const std::string& role, const std::vector<std::string>& removeKeys);
+    Error UpdateDelegationPaths(const std::string& roleName, const std::vector<std::string>& addPaths, 
                                const std::vector<std::string>& removePaths, bool clearPaths);
-    Error DeleteDelegation(RoleName roleName);
+    Error DeleteDelegation(const std::string& roleName);
     
     // 验证和查询
-    Error VerifyCanSign(RoleName roleName) const;
-    FileMeta* TargetMeta(RoleName role, const std::string& path);
-    std::vector<DelegationRole> TargetDelegations(RoleName role, const std::string& path) const;
+    Error VerifyCanSign(const std::string& roleName) const;
+    FileMeta* TargetMeta(const std::string& role, const std::string& path);
+    std::vector<DelegationRole> TargetDelegations(const std::string& role, const std::string& path) const;
     
     // 遍历
-    Error WalkTargets(const std::string& targetPath, RoleName rolePath, 
-                     WalkVisitorFunc visitTargets, const std::vector<RoleName>& skipRoles = {});
+    Error WalkTargets(const std::string& targetPath, const std::string& rolePath, 
+                     WalkVisitorFunc visitTargets, const std::vector<std::string>& skipRoles = {});
     
     // 元数据更新
-    Error UpdateSnapshot(RoleName role, const std::shared_ptr<Signed>& s);
+    Error UpdateSnapshot(const std::string& role, const std::shared_ptr<Signed>& s);
     Error UpdateTimestamp(const std::shared_ptr<Signed>& s);
 
 private:
     std::shared_ptr<SignedRoot> root_;
-    std::map<RoleName, std::shared_ptr<SignedTargets>> targets_;
+    std::map<std::string, std::shared_ptr<SignedTargets>> targets_;
     std::shared_ptr<SignedSnapshot> snapshot_;
     std::shared_ptr<SignedTimestamp> timestamp_;
     std::shared_ptr<crypto::CryptoService> cryptoService_;
@@ -367,7 +367,7 @@ private:
     BaseRole originalRootRole_;
     
     // 角色标记为需要重新签名
-    void markRoleDirty(RoleName role);
+    void markRoleDirty(const std::string& role);
     
     // 内部签名方法
     Result<std::shared_ptr<Signed>> sign(std::shared_ptr<Signed> signedData, 
@@ -376,17 +376,17 @@ private:
     
     // 辅助方法
     bool isValidPath(const std::string& candidatePath, const DelegationRole& delgRole) const;
-    bool isAncestorRole(RoleName candidateChild, RoleName candidateAncestor) const;
+    bool isAncestorRole(const std::string& candidateChild, const std::string& candidateAncestor) const;
 };
 
 // 辅助函数：角色验证
-bool IsDelegation(RoleName role);
-bool IsWildDelegation(RoleName role);
-bool IsValidTargetsRole(RoleName role);
+bool IsDelegation(const std::string& role);
+bool IsWildDelegation(const std::string& role);
+bool IsValidTargetsRole(const std::string& role);
 
 // 辅助函数：创建新的TUF对象
 std::shared_ptr<SignedRoot> NewRoot(const std::map<std::string, std::shared_ptr<crypto::PublicKey>>& keys,
-                                   const std::map<RoleName, BaseRole>& roles, 
+                                   const std::map<std::string, BaseRole>& roles, 
                                    bool consistent = false);
 
 std::shared_ptr<SignedTargets> NewTargets();

@@ -24,9 +24,9 @@ std::string ConsistentInfo::consistentName() const {
     auto it = fileMeta_.Hashes.find("sha256");
     if (it != fileMeta_.Hashes.end()) {
         std::string hashHex = utils::HexEncode(it->second);
-        return roleToString(roleName_) + "." + hashHex;
+        return roleName_ + "." + hashHex;
     }
-    return roleToString(roleName_);
+    return roleName_;
 }
 
 int64_t ConsistentInfo::length() const {
@@ -37,7 +37,7 @@ int64_t ConsistentInfo::length() const {
 }
 
 // FinishedBuilder 实现
-Error FinishedBuilder::load(RoleName roleName, const std::vector<uint8_t>& content, 
+Error FinishedBuilder::load(const std::string& roleName, const std::vector<uint8_t>& content, 
                            int minVersion, bool allowExpired) {
     return Error("the builder has finished building and cannot accept any more input or produce any more output");
 }
@@ -73,11 +73,11 @@ std::unique_ptr<RepoBuilder> FinishedBuilder::bootstrapNewBuilderWithNewTrustpin
     return std::make_unique<FinishedBuilder>();
 }
 
-bool FinishedBuilder::isLoaded(RoleName roleName) const { return false; }
+bool FinishedBuilder::isLoaded(const std::string& roleName) const { return false; }
 
-int FinishedBuilder::getLoadedVersion(RoleName roleName) const { return 0; }
+int FinishedBuilder::getLoadedVersion(const std::string& roleName) const { return 0; }
 
-ConsistentInfo FinishedBuilder::getConsistentInfo(RoleName roleName) const {
+ConsistentInfo FinishedBuilder::getConsistentInfo(const std::string& roleName) const {
     return ConsistentInfo(roleName);
 }
 
@@ -97,99 +97,86 @@ RepoBuilderImpl::RepoBuilderImpl(const std::string& gun,
     invalidRoles_ = std::make_shared<Repo>(nullptr);
 }
 
-bool RepoBuilderImpl::isLoaded(RoleName roleName) const {
-    switch (roleName) {
-        case RoleName::RootRole:
-            return repo_->GetRoot() != nullptr;
-        case RoleName::SnapshotRole:
-            return repo_->GetSnapshot() != nullptr;
-        case RoleName::TimestampRole:
-            return repo_->GetTimestamp() != nullptr;
-        case RoleName::TargetsRole:
-            return repo_->GetTargets().find(roleName) != repo_->GetTargets().end();
-        default:
-            return repo_->GetTargets().find(roleName) != repo_->GetTargets().end();
+bool RepoBuilderImpl::isLoaded(const std::string& roleName) const {
+    if (roleName == ROOT_ROLE) {
+        return repo_->GetRoot() != nullptr;
+    } else if (roleName == SNAPSHOT_ROLE) {
+        return repo_->GetSnapshot() != nullptr;
+    } else if (roleName == TIMESTAMP_ROLE) {
+        return repo_->GetTimestamp() != nullptr;
+    } else if (roleName == TARGETS_ROLE) {
+        return repo_->GetTargets().find(roleName) != repo_->GetTargets().end();
+    } else {
+        return repo_->GetTargets().find(roleName) != repo_->GetTargets().end();
     }
 }
 
-int RepoBuilderImpl::getLoadedVersion(RoleName roleName) const {
-    switch (roleName) {
-        case RoleName::RootRole:
-            if (auto root = repo_->GetRoot()) {
-                return root->Signed.Common.Version;
-            }
-            break;
-        case RoleName::SnapshotRole:
-            if (auto snapshot = repo_->GetSnapshot()) {
-                return snapshot->Signed.Common.Version;
-            }
-            break;
-        case RoleName::TimestampRole:
-            if (auto timestamp = repo_->GetTimestamp()) {
-                return timestamp->Signed.Common.Version;
-            }
-            break;
-        default:
-            {
-                auto targets = repo_->GetTargets();
-                auto it = targets.find(roleName);
-                if (it != targets.end()) {
-                    return it->second->Signed.Common.Version;
-                }
-            }
-            break;
+int RepoBuilderImpl::getLoadedVersion(const std::string& roleName) const {
+    if (roleName == ROOT_ROLE) {
+        if (auto root = repo_->GetRoot()) {
+            return root->Signed.Common.Version;
+        }
+    } else if (roleName == SNAPSHOT_ROLE) {
+        if (auto snapshot = repo_->GetSnapshot()) {
+            return snapshot->Signed.Common.Version;
+        }
+    } else if (roleName == TIMESTAMP_ROLE) {
+        if (auto timestamp = repo_->GetTimestamp()) {
+            return timestamp->Signed.Common.Version;
+        }
+    } else {
+        auto targets = repo_->GetTargets();
+        auto it = targets.find(roleName);
+        if (it != targets.end()) {
+            return it->second->Signed.Common.Version;
+        }
     }
-    return 1; // 最小有效版本号
+    return 0; // 最小有效版本号
 }
 
-ConsistentInfo RepoBuilderImpl::getConsistentInfo(RoleName roleName) const {
+ConsistentInfo RepoBuilderImpl::getConsistentInfo(const std::string& roleName) const {
     ConsistentInfo info(roleName); // 开始时文件元数据未知
     
-    switch (roleName) {
-        case RoleName::TimestampRole:
-            // 我们不想获得一致的时间戳，但我们确实想限制其大小
-            // 使用与Go版本相同的1MB限制 (1 << 20)
-            info.setFileMeta(FileMeta{.Length = 1024 * 1024}); // 1MB 限制，与Go版本的MaxTimestampSize一致
-            break;
-        case RoleName::SnapshotRole:
-            if (auto timestamp = repo_->GetTimestamp()) {
-                auto it = timestamp->Signed.Meta.find(roleToString(roleName) + ".json");
-                if (it != timestamp->Signed.Meta.end()) {
-                    info.setFileMeta(it->second);
-                }
+    if (roleName == TIMESTAMP_ROLE) {
+        // 我们不想获得一致的时间戳，但我们确实想限制其大小
+        // 使用与Go版本相同的1MB限制 (1 << 20)
+        info.setFileMeta(FileMeta{.Length = 1024 * 1024}); // 1MB 限制，与Go版本的MaxTimestampSize一致
+    } else if (roleName == SNAPSHOT_ROLE) {
+        if (auto timestamp = repo_->GetTimestamp()) {
+            auto it = timestamp->Signed.Meta.find(roleName + ".json");
+            if (it != timestamp->Signed.Meta.end()) {
+                info.setFileMeta(it->second);
             }
-            break;
-        case RoleName::RootRole:
-            if (bootstrappedRootChecksum_) {
-                info.setFileMeta(*bootstrappedRootChecksum_);
-            } else if (auto snapshot = repo_->GetSnapshot()) {
-                auto it = snapshot->Signed.Meta.find(roleToString(roleName) + ".json");
-                if (it != snapshot->Signed.Meta.end()) {
-                    info.setFileMeta(it->second);
-                }
+        }
+    } else if (roleName == ROOT_ROLE) {
+        if (bootstrappedRootChecksum_) {
+            info.setFileMeta(*bootstrappedRootChecksum_);
+        } else if (auto snapshot = repo_->GetSnapshot()) {
+            auto it = snapshot->Signed.Meta.find(roleName + ".json");
+            if (it != snapshot->Signed.Meta.end()) {
+                info.setFileMeta(it->second);
             }
-            break;
-        default:
-            if (auto snapshot = repo_->GetSnapshot()) {
-                auto it = snapshot->Signed.Meta.find(roleToString(roleName) + ".json");
-                if (it != snapshot->Signed.Meta.end()) {
-                    info.setFileMeta(it->second);
-                }
+        }
+    } else {
+        if (auto snapshot = repo_->GetSnapshot()) {
+            auto it = snapshot->Signed.Meta.find(roleName + ".json");
+            if (it != snapshot->Signed.Meta.end()) {
+                info.setFileMeta(it->second);
             }
-            break;
+        }
     }
     
     return info;
 }
 
-Error RepoBuilderImpl::load(RoleName roleName, const std::vector<uint8_t>& content, 
+Error RepoBuilderImpl::load(const std::string& roleName, const std::vector<uint8_t>& content, 
                            int minVersion, bool allowExpired) {
     return loadOptions(roleName, content, minVersion, allowExpired, false, false);
 }
 
 Error RepoBuilderImpl::loadRootForUpdate(const std::vector<uint8_t>& content, 
                                         int minVersion, bool isFinal) {
-    Error err = loadOptions(RoleName::RootRole, content, minVersion, !isFinal, !isFinal, true);
+    Error err = loadOptions(ROOT_ROLE, content, minVersion, !isFinal, !isFinal, true);
     if (err.hasError()) {
         return err;
     }
@@ -208,18 +195,18 @@ Result<std::pair<std::vector<uint8_t>, int>> RepoBuilderImpl::generateSnapshot(
             Error("cannot generate snapshot without a cryptoservice"));
     }
     
-    if (isLoaded(RoleName::SnapshotRole)) {
+    if (isLoaded(SNAPSHOT_ROLE)) {
         return Result<std::pair<std::vector<uint8_t>, int>>(
             Error("snapshot has already been loaded"));
     }
     
-    if (isLoaded(RoleName::TimestampRole)) {
+    if (isLoaded(TIMESTAMP_ROLE)) {
         return Result<std::pair<std::vector<uint8_t>, int>>(
             Error("cannot generate snapshot if timestamp has already been loaded"));
     }
     
     // 2. 检查前置条件 - 必须已加载root
-    Error prereqErr = checkRoleLoaded(RoleName::RootRole);
+    Error prereqErr = checkRoleLoaded(ROOT_ROLE);
     if (prereqErr.hasError()) {
         return Result<std::pair<std::vector<uint8_t>, int>>(prereqErr);
     }
@@ -227,7 +214,7 @@ Result<std::pair<std::vector<uint8_t>, int>> RepoBuilderImpl::generateSnapshot(
     // 3. 处理prev参数
     if (!prev) {
         // 如果没有之前的snapshot，需要生成一个，因此targets必须已经加载
-        Error targetsErr = checkRoleLoaded(RoleName::TargetsRole);
+        Error targetsErr = checkRoleLoaded(TARGETS_ROLE);
         if (targetsErr.hasError()) {
             return Result<std::pair<std::vector<uint8_t>, int>>(targetsErr);
         }
@@ -247,7 +234,7 @@ Result<std::pair<std::vector<uint8_t>, int>> RepoBuilderImpl::generateSnapshot(
     }
     
     // 4. 签名snapshot - 使用默认过期时间
-    auto defaultExpires = utils::getDefaultExpiry(RoleName::SnapshotRole);
+    auto defaultExpires = utils::getDefaultExpiry(SNAPSHOT_ROLE);
     auto signResult = repo_->SignSnapshot(defaultExpires);
     if (!signResult.ok()) {
         repo_->SetSnapshot(nullptr);
@@ -276,11 +263,11 @@ Result<std::pair<std::vector<uint8_t>, int>> RepoBuilderImpl::generateSnapshot(
     for (const auto& [tgtName, _] : targets) {
         loadedNotChecksummed_.erase(tgtName);
     }
-    loadedNotChecksummed_.erase(RoleName::RootRole);
+    loadedNotChecksummed_.erase(ROOT_ROLE);
     
     // timestamp还不能被加载，所以我们想缓存snapshot字节，
     // 这样当稍后生成或加载timestamp时就可以验证校验和
-    loadedNotChecksummed_[RoleName::SnapshotRole] = sgndJSON;
+    loadedNotChecksummed_[SNAPSHOT_ROLE] = sgndJSON;
     
     int version = repo_->GetSnapshot()->Signed.Common.Version;
     return Result<std::pair<std::vector<uint8_t>, int>>(
@@ -295,18 +282,18 @@ Result<std::pair<std::vector<uint8_t>, int>> RepoBuilderImpl::generateTimestamp(
             Error("cannot generate timestamp without a cryptoservice"));
     }
     
-    if (isLoaded(RoleName::TimestampRole)) {
+    if (isLoaded(TIMESTAMP_ROLE)) {
         return Result<std::pair<std::vector<uint8_t>, int>>(
             Error("timestamp has already been loaded"));
     }
     
     // 2. SignTimestamp总是序列化已加载的snapshot并在数据中签名，
     // 所以我们必须始终首先加载snapshot
-    std::vector<RoleName> prereqRoles = {RoleName::RootRole, RoleName::SnapshotRole};
-    for (RoleName req : prereqRoles) {
+    std::vector<std::string> prereqRoles = {ROOT_ROLE, SNAPSHOT_ROLE};
+    for (const std::string& req : prereqRoles) {
         if (!isLoaded(req)) {
             return Result<std::pair<std::vector<uint8_t>, int>>(
-                Error(roleToString(req) + " must be loaded first"));
+                Error(req + " must be loaded first"));
         }
     }
     
@@ -327,7 +314,7 @@ Result<std::pair<std::vector<uint8_t>, int>> RepoBuilderImpl::generateTimestamp(
     }
     
     // 4. 签名timestamp - 使用默认过期时间
-    auto defaultExpires = utils::getDefaultExpiry(RoleName::TimestampRole);
+    auto defaultExpires = utils::getDefaultExpiry(TIMESTAMP_ROLE);
     auto signResult = repo_->SignTimestamp(defaultExpires);
     if (!signResult.ok()) {
         repo_->SetTimestamp(nullptr);
@@ -353,7 +340,7 @@ Result<std::pair<std::vector<uint8_t>, int>> RepoBuilderImpl::generateTimestamp(
     // 所以它正在等待校验和。由于这个timestamp是使用等待校验和的snapshot生成的，
     // 我们可以从rb.loadedNotChecksummed中删除它。现在应该没有其他等待校验和的项目，
     // 因为加载/生成snapshot应该已经清除了`loadNotChecksummed`中的所有其他内容。
-    loadedNotChecksummed_.erase(RoleName::SnapshotRole);
+    loadedNotChecksummed_.erase(SNAPSHOT_ROLE);
     
     int version = repo_->GetTimestamp()->Signed.Common.Version;
     return Result<std::pair<std::vector<uint8_t>, int>>(
@@ -395,16 +382,16 @@ std::unique_ptr<RepoBuilder> RepoBuilderImpl::bootstrapNewBuilderWithNewTrustpin
 }
 
 // 私有辅助方法
-Error RepoBuilderImpl::loadOptions(RoleName roleName, const std::vector<uint8_t>& content, 
+Error RepoBuilderImpl::loadOptions(const std::string& roleName, const std::vector<uint8_t>& content, 
                                   int minVersion, bool allowExpired, bool skipChecksum, bool allowLoaded) {
     // 验证角色名称
     if (!isValidRole(roleName)) {
-        return Error("invalid role: " + roleToString(roleName));
+        return Error("invalid role: " + roleName);
     }
     
     // 检查是否已加载（除非允许重新加载）
     if (!allowLoaded && isLoaded(roleName)) {
-        return Error(roleToString(roleName) + " has already been loaded");
+        return Error(roleName + " has already been loaded");
     }
     
     // 检查前置条件
@@ -414,41 +401,35 @@ Error RepoBuilderImpl::loadOptions(RoleName roleName, const std::vector<uint8_t>
     }
     
     // 根据角色类型加载不同的元数据
-    switch (roleName) {
-        case RoleName::RootRole:
-            return loadRoot(content, minVersion, allowExpired, skipChecksum);
-        case RoleName::SnapshotRole:
-            return loadSnapshot(content, minVersion, allowExpired);
-        case RoleName::TimestampRole:
-            return loadTimestamp(content, minVersion, allowExpired);
-        case RoleName::TargetsRole:
-            return loadTargets(content, minVersion, allowExpired);
-        default:
-            return loadDelegation(roleName, content, minVersion, allowExpired);
+    if (roleName == ROOT_ROLE) {
+        return loadRoot(content, minVersion, allowExpired, skipChecksum);
+    } else if (roleName == SNAPSHOT_ROLE) {
+        return loadSnapshot(content, minVersion, allowExpired);
+    } else if (roleName == TIMESTAMP_ROLE) {
+        return loadTimestamp(content, minVersion, allowExpired);
+    } else if (roleName == TARGETS_ROLE) {
+        return loadTargets(content, minVersion, allowExpired);
+    } else {
+        return loadDelegation(roleName, content, minVersion, allowExpired);
     }
 }
 
-Error RepoBuilderImpl::checkPrereqsLoaded(RoleName roleName) {
-    std::vector<RoleName> prereqRoles;
+Error RepoBuilderImpl::checkPrereqsLoaded(const std::string& roleName) {
+    std::vector<std::string> prereqRoles;
     
-    switch (roleName) {
-        case RoleName::RootRole:
-            // root 没有前置条件
-            break;
-        case RoleName::TimestampRole:
-        case RoleName::SnapshotRole:
-        case RoleName::TargetsRole:
-            prereqRoles.push_back(RoleName::RootRole);
-            break;
-        default: // 委托
-            prereqRoles.push_back(RoleName::RootRole);
-            prereqRoles.push_back(RoleName::TargetsRole);
-            break;
+    if(roleName == ROOT_ROLE) {
+        // root 没有前置条件
+    } else if(roleName == TIMESTAMP_ROLE || roleName == SNAPSHOT_ROLE || roleName == TARGETS_ROLE) {
+        prereqRoles.push_back(ROOT_ROLE);
+    } else {
+        // 委托
+        prereqRoles.push_back(ROOT_ROLE);
+        prereqRoles.push_back(TARGETS_ROLE);
     }
     
-    for (RoleName req : prereqRoles) {
+    for (const std::string& req : prereqRoles) {
         if (!isLoaded(req)) {
-            return Error(roleToString(req) + " must be loaded first");
+            return Error(req + " must be loaded first");
         }
     }
     
@@ -456,29 +437,24 @@ Error RepoBuilderImpl::checkPrereqsLoaded(RoleName roleName) {
 }
 
 // 检查单个角色是否已加载
-Error RepoBuilderImpl::checkRoleLoaded(RoleName singleRole) {
+Error RepoBuilderImpl::checkRoleLoaded(const std::string& singleRole) {
     if (!isLoaded(singleRole)) {
-        return Error(roleToString(singleRole) + " must be loaded first");
+        return Error(singleRole + " must be loaded first");
     }
     return Error(); // 成功
 }
 
-bool RepoBuilderImpl::isValidRole(RoleName roleName) {
+bool RepoBuilderImpl::isValidRole(const std::string& roleName) {
     // 简单的角色验证
-    switch (roleName) {
-        case RoleName::RootRole:
-        case RoleName::TargetsRole:
-        case RoleName::SnapshotRole:
-        case RoleName::TimestampRole:
-            return true;
-        default:
-            return false; // 暂时不支持委托角色
+    if (roleName == ROOT_ROLE || roleName == TARGETS_ROLE || roleName == SNAPSHOT_ROLE || roleName == TIMESTAMP_ROLE) {
+        return true;
     }
+    return false; // 暂时不支持委托角色
 }
 
 Error RepoBuilderImpl::loadRoot(const std::vector<uint8_t>& content, int minVersion, 
                                bool allowExpired, bool skipChecksum) {
-    RoleName roleName = RoleName::RootRole;
+    std::string roleName = ROOT_ROLE;
 
     // 1. 转换字节到Signed对象并检查校验和（如果不跳过）
     // 对应Go版本的：signedObj, err := rb.bytesToSigned(content, data.CanonicalRootRole, skipChecksum)
@@ -535,7 +511,7 @@ Error RepoBuilderImpl::loadRoot(const std::vector<uint8_t>& content, int minVers
 
 Error RepoBuilderImpl::loadSnapshot(const std::vector<uint8_t>& content, int minVersion, 
                                    bool allowExpired) {
-    RoleName roleName = RoleName::SnapshotRole;
+    std::string  roleName = SNAPSHOT_ROLE;
 
     // 从root获取snapshot角色
     auto snapshotRoleResult = repo_->GetBaseRole(roleName);
@@ -584,7 +560,7 @@ Error RepoBuilderImpl::loadSnapshot(const std::vector<uint8_t>& content, int min
     // 到这一点，剩下的唯一要验证的是现有的校验和 - 我们可以使用
     // 这个snapshot来引导下一个builder（如果需要的话） - 我们不需要做
     // 2值赋值，因为我们已经验证了signedSnapshot，它必须有root元数据
-    auto rootMetaIt = signedSnapshot->Signed.Meta.find(roleToString(RoleName::RootRole) + ".json");
+    auto rootMetaIt = signedSnapshot->Signed.Meta.find(ROOT_ROLE + ".json");
     if (rootMetaIt != signedSnapshot->Signed.Meta.end()) {
         nextRootChecksum_ = std::make_shared<FileMeta>(rootMetaIt->second);
     }
@@ -601,7 +577,7 @@ Error RepoBuilderImpl::loadSnapshot(const std::vector<uint8_t>& content, int min
 
 Error RepoBuilderImpl::loadTimestamp(const std::vector<uint8_t>& content, int minVersion, 
                                     bool allowExpired) {
-    RoleName roleName = RoleName::TimestampRole;
+    std::string roleName = TIMESTAMP_ROLE;
 
     // 从root获取timestamp角色
     auto timestampRoleResult = repo_->GetBaseRole(roleName);
@@ -659,7 +635,7 @@ Error RepoBuilderImpl::loadTimestamp(const std::vector<uint8_t>& content, int mi
 
 Error RepoBuilderImpl::loadTargets(const std::vector<uint8_t>& content, int minVersion, 
                                   bool allowExpired) {
-    RoleName roleName = RoleName::TargetsRole;
+    std::string roleName = TARGETS_ROLE;
 
     // 从root获取targets角色
     auto targetsRoleResult = repo_->GetBaseRole(roleName);
@@ -711,7 +687,7 @@ Error RepoBuilderImpl::loadTargets(const std::vector<uint8_t>& content, int minV
     return Error(); // 成功
 }
 
-Error RepoBuilderImpl::loadDelegation(RoleName roleName, const std::vector<uint8_t>& content, 
+Error RepoBuilderImpl::loadDelegation(const std::string& roleName, const std::vector<uint8_t>& content, 
                                      int minVersion, bool allowExpired) {
     // 获取委托角色 TODO: 未实现repo_->GetDelegationRole
     auto delegationRoleResult = repo_->GetDelegationRole(roleName);
@@ -780,7 +756,7 @@ Error RepoBuilderImpl::loadDelegation(RoleName roleName, const std::vector<uint8
 RepoBuilderWrapper::RepoBuilderWrapper(std::unique_ptr<RepoBuilder> builder)
     : builder_(std::move(builder)) {}
 
-Error RepoBuilderWrapper::load(RoleName roleName, const std::vector<uint8_t>& content, 
+Error RepoBuilderWrapper::load(const std::string& roleName, const std::vector<uint8_t>& content, 
                               int minVersion, bool allowExpired) {
     return builder_->load(roleName, content, minVersion, allowExpired);
 }
@@ -823,15 +799,15 @@ std::unique_ptr<RepoBuilder> RepoBuilderWrapper::bootstrapNewBuilderWithNewTrust
     return builder_->bootstrapNewBuilderWithNewTrustpin(trustpin);
 }
 
-bool RepoBuilderWrapper::isLoaded(RoleName roleName) const {
+bool RepoBuilderWrapper::isLoaded(const std::string& roleName) const {
     return builder_->isLoaded(roleName);
 }
 
-int RepoBuilderWrapper::getLoadedVersion(RoleName roleName) const {
+int RepoBuilderWrapper::getLoadedVersion(const std::string& roleName) const {
     return builder_->getLoadedVersion(roleName);
 }
 
-ConsistentInfo RepoBuilderWrapper::getConsistentInfo(RoleName roleName) const {
+ConsistentInfo RepoBuilderWrapper::getConsistentInfo(const std::string& roleName) const {
     return builder_->getConsistentInfo(roleName);
 }
 
@@ -852,7 +828,7 @@ std::unique_ptr<RepoBuilder> NewBuilderFromRepo(const std::string& gun,
 // RepoBuilderImpl 私有方法实现
 
 Result<std::shared_ptr<Signed>> RepoBuilderImpl::bytesToSigned(const std::vector<uint8_t>& content, 
-                                                               RoleName roleName, bool skipChecksum) {
+                                                               const std::string& roleName, bool skipChecksum) {
     if (!skipChecksum) {
         Error err = validateChecksumFor(content, roleName);
         if (err.hasError()) {
@@ -892,10 +868,10 @@ Result<std::shared_ptr<Signed>> RepoBuilderImpl::bytesToSignedAndValidateSigs(co
     return signedResult;
 }
 
-Error RepoBuilderImpl::validateChecksumFor(const std::vector<uint8_t>& content, RoleName roleName) {
+Error RepoBuilderImpl::validateChecksumFor(const std::vector<uint8_t>& content, const std::string& roleName) {
     // 对于root角色，如果有bootstrapped checksum，则首先验证它
-    if (roleName == RoleName::RootRole && bootstrappedRootChecksum_) {
-        Error err = utils::CheckHashes(content, roleToString(roleName), bootstrappedRootChecksum_->Hashes);
+    if (roleName == ROOT_ROLE && bootstrappedRootChecksum_) {
+        Error err = utils::CheckHashes(content, roleName, bootstrappedRootChecksum_->Hashes);
         if (err.hasError()) {
             return err;
         }
@@ -905,11 +881,11 @@ Error RepoBuilderImpl::validateChecksumFor(const std::vector<uint8_t>& content, 
     // （以确保仓库中的所有内容都是自一致的）
     auto checksums = getChecksumsFor(roleName);
     if (checksums) { // 不同于空，在这种情况下哈希检查应该失败
-        Error err = utils::CheckHashes(content, roleToString(roleName), *checksums);
+        Error err = utils::CheckHashes(content, roleName, *checksums);
         if (err.hasError()) {
             return err;
         }
-    } else if (roleName != RoleName::TimestampRole) {
+    } else if (roleName != TIMESTAMP_ROLE) {
         // timestamp是唯一不需要校验和的角色，但对于其他所有内容，
         // 将内容缓存到尚未被snapshot/timestamp校验和的角色列表中
         loadedNotChecksummed_[roleName] = content;
@@ -919,34 +895,31 @@ Error RepoBuilderImpl::validateChecksumFor(const std::vector<uint8_t>& content, 
 }
 
 
-std::shared_ptr<std::map<std::string, std::vector<uint8_t>>> RepoBuilderImpl::getChecksumsFor(RoleName role) const {
+std::shared_ptr<std::map<std::string, std::vector<uint8_t>>> RepoBuilderImpl::getChecksumsFor(const std::string& role) const {
     std::map<std::string, std::vector<uint8_t>> hashes;
     
-    switch (role) {
-        case RoleName::TimestampRole:
+    if(role == TIMESTAMP_ROLE) {
             // timestamp角色没有校验和引用
             return nullptr;
-        case RoleName::SnapshotRole:
+    } else if(role == SNAPSHOT_ROLE) {
             if (auto timestamp = repo_->GetTimestamp()) {
-                auto it = timestamp->Signed.Meta.find(roleToString(role) + ".json");
+                auto it = timestamp->Signed.Meta.find(role + ".json");
                 if (it != timestamp->Signed.Meta.end()) {
                     hashes = it->second.Hashes;
                 }
             } else {
                 return nullptr;
             }
-            break;
-        default:
-            // root、targets等角色从snapshot中获取校验和
-            if (auto snapshot = repo_->GetSnapshot()) {
-                auto it = snapshot->Signed.Meta.find(roleToString(role) + ".json");
-                if (it != snapshot->Signed.Meta.end()) {
-                    hashes = it->second.Hashes;
-                }
-            } else {
-                return nullptr;
+    } else {
+        // root、targets等角色从snapshot中获取校验和
+        if (auto snapshot = repo_->GetSnapshot()) {
+            auto it = snapshot->Signed.Meta.find(role + ".json");
+            if (it != snapshot->Signed.Meta.end()) {
+                hashes = it->second.Hashes;
             }
-            break;
+        } else {
+            return nullptr;
+        }
     }
     
     return std::make_shared<std::map<std::string, std::vector<uint8_t>>>(hashes);
@@ -958,12 +931,12 @@ Error RepoBuilderImpl::validateChecksumsFromTimestamp(std::shared_ptr<SignedTime
     }
     
     // 检查是否有snapshot需要验证 - 与Go版本等价
-    auto it = loadedNotChecksummed_.find(RoleName::SnapshotRole);
+    auto it = loadedNotChecksummed_.find(SNAPSHOT_ROLE);
     if (it != loadedNotChecksummed_.end()) {
         // 到这一点，SignedTimestamp已经被验证，所以它必须有snapshot哈希
-        auto snMetaIt = ts->Signed.Meta.find(roleToString(RoleName::SnapshotRole) + ".json");
+        auto snMetaIt = ts->Signed.Meta.find(SNAPSHOT_ROLE + ".json");
         if (snMetaIt != ts->Signed.Meta.end()) {
-            Error err = utils::CheckHashes(it->second, roleToString(RoleName::SnapshotRole), snMetaIt->second.Hashes);
+            Error err = utils::CheckHashes(it->second, SNAPSHOT_ROLE, snMetaIt->second.Hashes);
             if (err.hasError()) {
                 return err;
             }
@@ -980,19 +953,19 @@ Error RepoBuilderImpl::validateChecksumsFromSnapshot(std::shared_ptr<SignedSnaps
         return Error("Snapshot is null");
     }
     
-    std::vector<RoleName> goodRoles;
+    std::vector<std::string> goodRoles;
     
     // 验证从snapshot加载的未校验和内容 - 与Go版本等价
     for (const auto& [roleName, loadedBytes] : loadedNotChecksummed_) {
         // 跳过snapshot和timestamp角色
-        if (roleName == RoleName::SnapshotRole || roleName == RoleName::TimestampRole) {
+        if (roleName == SNAPSHOT_ROLE || roleName == TIMESTAMP_ROLE) {
             continue;
         }
         
         // 查找该角色在snapshot中的元数据
-        auto metaIt = sn->Signed.Meta.find(roleToString(roleName) + ".json");
+        auto metaIt = sn->Signed.Meta.find(roleName + ".json");
         if (metaIt != sn->Signed.Meta.end()) {
-            Error err = utils::CheckHashes(loadedBytes, roleToString(roleName), metaIt->second.Hashes);
+            Error err = utils::CheckHashes(loadedBytes, roleName, metaIt->second.Hashes);
             if (err.hasError()) {
                 return err;
             }
@@ -1009,11 +982,11 @@ Error RepoBuilderImpl::validateChecksumsFromSnapshot(std::shared_ptr<SignedSnaps
 }
 
 // 从Root对象构建BaseRole - 对应Go版本的BuildBaseRole方法
-Result<BaseRole> RepoBuilderImpl::buildBaseRoleFromRoot(std::shared_ptr<SignedRoot> signedRoot, RoleName roleName) {
+Result<BaseRole> RepoBuilderImpl::buildBaseRoleFromRoot(std::shared_ptr<SignedRoot> signedRoot, const std::string& roleName) {
     // 查找角色 - 直接使用RoleName作为键
     auto roleIt = signedRoot->Signed.Roles.find(roleName);
     if (roleIt == signedRoot->Signed.Roles.end()) {
-        return Result<BaseRole>(Error("role not found in root: " + roleToString(roleName)));
+        return Result<BaseRole>(Error("role not found in root: " + roleName));
     }
     
     // 在C++版本中，Roles已经是解析过的BaseRole对象，直接返回

@@ -6,7 +6,7 @@ namespace notary {
 namespace server {
 
 struct MetaUpdate {
-    RoleName role;
+    std::string role;
     std::string roleName;
     int version;
     std::string data;

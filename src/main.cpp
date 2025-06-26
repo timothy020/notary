@@ -23,11 +23,11 @@ namespace fs = std::filesystem;
 // 密钥信息结构（用于排序和显示）
 struct KeyDisplayInfo {
     std::string gun;       // 仓库名称
-    RoleName role;         // 密钥角色
+    std::string role;         // 密钥角色
     std::string keyID;     // 密钥ID
     std::string location;  // 密钥存储位置
     
-    KeyDisplayInfo(const std::string& g, RoleName r, const std::string& id, const std::string& loc)
+    KeyDisplayInfo(const std::string& g, const std::string& r, const std::string& id, const std::string& loc)
         : gun(g), role(r), keyID(id), location(loc) {}
 };
 
@@ -48,10 +48,10 @@ std::string truncateWithEllipsis(const std::string& str, size_t maxWidth, bool l
 bool compareKeyInfo(const KeyDisplayInfo& a, const KeyDisplayInfo& b) {
     // 特殊处理root角色 - root角色总是排在前面
     if (a.role != b.role) {
-        if (a.role == RoleName::RootRole) {
+        if (a.role == ROOT_ROLE) {
             return true;
         }
-        if (b.role == RoleName::RootRole) {
+        if (b.role == ROOT_ROLE) {
             return false;
         }
         // 其他角色按字符串顺序排序
@@ -60,13 +60,13 @@ bool compareKeyInfo(const KeyDisplayInfo& a, const KeyDisplayInfo& b) {
     // 排序顺序：GUN, role, keyID, location
     std::vector<std::string> orderedA = {
         a.gun, 
-        roleToString(a.role), 
+        a.role, 
         a.keyID, 
         a.location
     };
     std::vector<std::string> orderedB = {
         b.gun, 
-        roleToString(b.role), 
+        b.role, 
         b.keyID, 
         b.location
     };
@@ -126,7 +126,7 @@ void prettyPrintKeys(const std::vector<std::unique_ptr<storage::GenericKeyStore>
     // 打印每个密钥的信息
     for (const auto& keyInfo : info) {
         std::cout << std::left
-                  << std::setw(15) << roleToString(keyInfo.role)
+                  << std::setw(15) << keyInfo.role
                   << std::setw(maxGUNWidth + 2) << truncateWithEllipsis(keyInfo.gun, maxGUNWidth, true)
                   << std::setw(66) << keyInfo.keyID
                   << std::setw(maxLocWidth + 2) << truncateWithEllipsis(keyInfo.location, maxLocWidth, true)
@@ -175,7 +175,7 @@ Error removeKeyInteractively(const std::vector<std::unique_ptr<storage::GenericK
         for (const auto& [fullKeyID, keyInfo] : keyInfoMap) {
             // 检查keyID是否匹配（完整匹配或以keyID开头）
             if (fullKeyID == keyID || fullKeyID.find(keyID) == 0) {
-                foundKeys.emplace_back(fullKeyID, roleToString(keyInfo.role), 
+                foundKeys.emplace_back(fullKeyID, keyInfo.role, 
                                      store->Name(), store.get());
             }
         }
@@ -284,7 +284,7 @@ void prettyPrintTargets(const std::vector<TargetWithRole>& targets) {
     for (const auto& targetWithRole : targets) {
         maxNameWidth = std::max(maxNameWidth, targetWithRole.target.name.length());
         maxSizeWidth = std::max(maxSizeWidth, std::to_string(targetWithRole.target.length).length());
-        maxRoleWidth = std::max(maxRoleWidth, roleToString(targetWithRole.role).length());
+        maxRoleWidth = std::max(maxRoleWidth, targetWithRole.role.length());
     }
     
     // 打印表头 (对应Go的fmt.Fprintf)
@@ -326,7 +326,7 @@ void prettyPrintTargets(const std::vector<TargetWithRole>& targets) {
                   << std::setw(maxNameWidth + 2) << target.name
                   << std::setw(16) << digest
                   << std::setw(maxSizeWidth + 2) << target.length
-                  << std::setw(maxRoleWidth + 2) << roleToString(targetWithRole.role)
+                  << std::setw(maxRoleWidth + 2) << targetWithRole.role
                   << std::endl;
     }
 }
@@ -1013,12 +1013,11 @@ int main(int argc, char** argv) {
             Repository repo(gun, trustDir, serverURL);
             
             // 3. 转换角色名称字符串为RoleName枚举 (对应Go的data.NewRoleList(t.roles))
-            std::vector<RoleName> roleNames;
+            std::vector<std::string> roleNames;
             for (const auto& roleStr : listRoles) {
                 // 检查角色字符串是否有效
                 if (roleStr == ROOT_ROLE || roleStr == TARGETS_ROLE || roleStr == SNAPSHOT_ROLE || roleStr == TIMESTAMP_ROLE) {
-                    auto roleName = stringToRole(roleStr);
-                    roleNames.push_back(roleName);
+                    roleNames.push_back(roleStr);
                 } else {
                     utils::GetLogger().Warn("Ignoring invalid role: " + roleStr);
                 }
@@ -1274,7 +1273,7 @@ int main(int argc, char** argv) {
                 }
                 
                 // 生成密钥并存储到密钥存储中 (对应Go版本的cs.Create)
-                auto pubKeyResult = cryptoService.Create(stringToRole(generateRole), "", generateAlgorithm);
+                auto pubKeyResult = cryptoService.Create(generateRole, "", generateAlgorithm);
                 if (!pubKeyResult.ok()) {
                     utils::GetLogger().Error("Failed to create a new " + generateRole + " key: " + 
                                            pubKeyResult.error().what());
@@ -1431,7 +1430,7 @@ int main(int argc, char** argv) {
             // 5. 在所有密钥存储中查找该密钥（对应Go的for循环查找）
             storage::GenericKeyStore* foundKeyStore = nullptr;
             std::shared_ptr<crypto::PrivateKey> privKey = nullptr;
-            RoleName keyRole;
+            std::string keyRole;
             
             for (auto& store : keyStores) {
                 auto keyResult = store->GetKey(keyID);
@@ -1500,7 +1499,7 @@ int main(int argc, char** argv) {
                 return;
             }
             
-            RoleName rotateKeyRole = stringToRole(rotateRole);
+            std::string rotateKeyRole = rotateRole;
             
             // 3. 加载配置 (对应Go的config, err := k.configGetter())
             auto configErr = loadConfig(configFile, trustDir, serverURL);
@@ -1543,7 +1542,7 @@ int main(int argc, char** argv) {
             }
             
             // 6. 根角色轮转确认 (对应Go的if rotateKeyRole == data.CanonicalRootRole)
-            if (rotateKeyRole == RoleName::RootRole) {
+            if (rotateKeyRole == ROOT_ROLE) {
                 std::cout << "Warning: you are about to rotate your root key.\n\n";
                 std::cout << "You must use your old key to sign this root rotation.\n";
                 std::cout << "Are you sure you want to proceed?  (yes/no)  ";

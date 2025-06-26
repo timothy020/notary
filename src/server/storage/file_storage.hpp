@@ -19,7 +19,7 @@ public:
     Result<Metadata> GetMetadata(const MetadataRequest& request) override;
     
     // 存储元数据
-    Result<bool> StoreMetadata(const std::string& gun, RoleName role, 
+    Result<bool> StoreMetadata(const std::string& gun, const std::string& role, 
                        const std::string& roleName, const std::string& data) override;
     
     // 删除GUN相关的所有元数据

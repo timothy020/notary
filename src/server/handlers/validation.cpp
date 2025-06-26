@@ -27,7 +27,7 @@ std::vector<MetaUpdate> validateUpdate(crypto::CryptoService* cryptoService, con
     updatesToApply.reserve(updates.size());
 
     // 创建角色映射
-    std::map<RoleName, MetaUpdate> roles;
+    std::map<std::string, MetaUpdate> roles;
     for (const auto& update : updates) {
         roles[update.role] = update;
     }
@@ -41,7 +41,7 @@ std::vector<MetaUpdate> validateUpdate(crypto::CryptoService* cryptoService, con
     
     // 尝试从存储加载root
     try {
-        loadFromStore(gun, RoleName::RootRole, builder.get(), store);
+        loadFromStore(gun, ROOT_ROLE, builder.get(), store);
     } catch (const std::exception& e) {
         // 如果是"not found"错误则忽略，其他错误需要抛出
         std::string errorMsg = e.what();
@@ -52,10 +52,10 @@ std::vector<MetaUpdate> validateUpdate(crypto::CryptoService* cryptoService, con
     }
 
     // 处理root更新
-    auto rootIt = roles.find(RoleName::RootRole);
+    auto rootIt = roles.find(ROOT_ROLE);
     if (rootIt != roles.end()) {
         const auto& rootUpdate = rootIt->second;
-        int currentRootVersion = builder->getLoadedVersion(RoleName::RootRole);
+        int currentRootVersion = builder->getLoadedVersion(ROOT_ROLE);
         
         if (rootUpdate.version != currentRootVersion && 
             rootUpdate.version != currentRootVersion + 1) {
@@ -70,7 +70,7 @@ std::vector<MetaUpdate> validateUpdate(crypto::CryptoService* cryptoService, con
         // 加载新的root
         try {
             std::vector<uint8_t> rootData(rootUpdate.data.begin(), rootUpdate.data.end());
-            auto err = builder->load(RoleName::RootRole, rootData, currentRootVersion, false);
+            auto err = builder->load(ROOT_ROLE, rootData, currentRootVersion, false);
             if (err.hasError()) {
                 throw std::runtime_error("Bad root: " + err.what());
             }
@@ -80,7 +80,7 @@ std::vector<MetaUpdate> validateUpdate(crypto::CryptoService* cryptoService, con
 
         utils::GetLogger().Debug("成功验证root");
         updatesToApply.push_back(rootUpdate);
-    } else if (!builder->isLoaded(RoleName::RootRole)) {
+    } else if (!builder->isLoaded(ROOT_ROLE)) {
         throw std::runtime_error("Validation error: no pre-existing root and no root provided in update.");
     }
 
@@ -95,13 +95,13 @@ std::vector<MetaUpdate> validateUpdate(crypto::CryptoService* cryptoService, con
     }
 
     // 此时，root和targets必须已经加载到repo中
-    auto snapshotIt = roles.find(RoleName::SnapshotRole);
+    auto snapshotIt = roles.find(SNAPSHOT_ROLE);
     if (snapshotIt != roles.end()) {
         const auto& snapshotUpdate = snapshotIt->second;
         
         try {
             std::vector<uint8_t> snapshotData(snapshotUpdate.data.begin(), snapshotUpdate.data.end());
-            auto err = builder->load(RoleName::SnapshotRole, snapshotData, 1, false);
+            auto err = builder->load(SNAPSHOT_ROLE, snapshotData, 1, false);
             if (err.hasError()) {
                 throw std::runtime_error("Bad snapshot: " + err.what());
             }
@@ -143,14 +143,14 @@ std::vector<MetaUpdate> validateUpdate(crypto::CryptoService* cryptoService, con
 }
 
 // 加载和验证目标角色 - 对应Go版本的loadAndValidateTargets
-std::vector<MetaUpdate> loadAndValidateTargets(const std::string& gun, tuf::RepoBuilder* builder, const std::map<RoleName, MetaUpdate>& roles, StorageService* store) {
+std::vector<MetaUpdate> loadAndValidateTargets(const std::string& gun, tuf::RepoBuilder* builder, const std::map<std::string, MetaUpdate>& roles, StorageService* store) {
     utils::GetLogger().Debug("开始加载和验证targets角色", 
         utils::LogContext().With("gun", gun));
 
     // 收集所有targets角色（包括委托）
     std::vector<std::string> targetsRoles;
     for (const auto& [role, update] : roles) {
-        if (role == RoleName::TargetsRole || 
+        if (role == TARGETS_ROLE || 
             (update.roleName.find("targets/") == 0)) { // 委托targets角色
             targetsRoles.push_back(update.roleName);
         }
@@ -194,7 +194,7 @@ std::vector<MetaUpdate> loadAndValidateTargets(const std::string& gun, tuf::Repo
             }
             
             // 检查是否已加载
-            RoleName parentRole = (ancestorRole == "targets") ? RoleName::TargetsRole : RoleName::TargetsRole;
+            std::string parentRole = (ancestorRole == "targets") ? TARGETS_ROLE : TARGETS_ROLE;
             if (!builder->isLoaded(parentRole)) {
                 parentsToLoad.push_back(ancestorRole);
             }
@@ -207,7 +207,7 @@ std::vector<MetaUpdate> loadAndValidateTargets(const std::string& gun, tuf::Repo
         // 从最顶层开始加载父角色
         std::reverse(parentsToLoad.begin(), parentsToLoad.end());
         for (const std::string& parentRoleStr : parentsToLoad) {
-            RoleName parentRole = (parentRoleStr == "targets") ? RoleName::TargetsRole : RoleName::TargetsRole;
+            std::string parentRole = (parentRoleStr == "targets") ? TARGETS_ROLE : TARGETS_ROLE;
             try {
                 loadFromStore(gun, parentRole, builder, store);
             } catch (const std::exception& e) {
@@ -229,7 +229,7 @@ std::vector<MetaUpdate> loadAndValidateTargets(const std::string& gun, tuf::Repo
             const auto& update = roleIt->second;
             
             try {
-                RoleName currentRole = (roleStr == "targets") ? RoleName::TargetsRole : RoleName::TargetsRole;
+                std::string currentRole = (roleStr == "targets") ? TARGETS_ROLE : TARGETS_ROLE;
                 std::vector<uint8_t> updateData(update.data.begin(), update.data.end());
                 auto err = builder->load(currentRole, updateData, 1, false);
                 if (err.hasError()) {
@@ -260,7 +260,7 @@ MetaUpdate generateSnapshot(const std::string& gun, tuf::RepoBuilder* builder, S
     try {
         MetadataRequest req;
         req.gun = gun;
-        req.role = RoleName::SnapshotRole;
+        req.role = SNAPSHOT_ROLE;
         req.roleName = "snapshot";
         req.version = 0; // 获取最新版本
         
@@ -295,7 +295,7 @@ MetaUpdate generateSnapshot(const std::string& gun, tuf::RepoBuilder* builder, S
         std::string metaStr(metaData.begin(), metaData.end());
         
         MetaUpdate update;
-        update.role = RoleName::SnapshotRole;
+        update.role = SNAPSHOT_ROLE;
         update.roleName = "snapshot";
         update.version = version;
         update.data = metaStr;
@@ -331,7 +331,7 @@ MetaUpdate generateTimestamp(const std::string& gun, tuf::RepoBuilder* builder, 
     try {
         MetadataRequest req;
         req.gun = gun;
-        req.role = RoleName::TimestampRole;
+        req.role = TIMESTAMP_ROLE;
         req.roleName = "timestamp";
         req.version = 0; // 获取最新版本
         
@@ -365,7 +365,7 @@ MetaUpdate generateTimestamp(const std::string& gun, tuf::RepoBuilder* builder, 
         std::string metaStr(metaData.begin(), metaData.end());
         
         MetaUpdate update;
-        update.role = RoleName::TimestampRole;
+        update.role = TIMESTAMP_ROLE;
         update.roleName = "timestamp";
         update.version = version;
         update.data = metaStr;
@@ -390,14 +390,14 @@ MetaUpdate generateTimestamp(const std::string& gun, tuf::RepoBuilder* builder, 
 }
 
 // 从存储加载元数据到构建器 - 对应Go版本的loadFromStore
-void loadFromStore(const std::string& gun, RoleName roleName, tuf::RepoBuilder* builder, StorageService* store) {
+void loadFromStore(const std::string& gun, const std::string& roleName, tuf::RepoBuilder* builder, StorageService* store) {
     try {
         MetadataRequest req;
         req.gun = gun;
         req.role = roleName;
         
         // 设置角色名称
-        req.roleName = notary::roleToString(roleName);
+        req.roleName = roleName;
         req.version = 0; // 获取最新版本
         
         auto result = store->GetMetadata(req);

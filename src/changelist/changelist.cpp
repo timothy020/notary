@@ -41,7 +41,7 @@ std::vector<uint8_t> TUFChange::Serialize() const {
 // TUFRootData序列化方法
 std::vector<uint8_t> TUFRootData::Serialize() const {
     json j;
-    j["roleName"] = roleToString(roleName);
+    j["roleName"] = roleName;
     j["keys"] = json::array();
     
     for (const auto& key : keys) {
@@ -79,7 +79,7 @@ Error TUFRootData::Deserialize(const std::vector<uint8_t>& data) {
         } else {
             roleStr = j["role"];
         }
-        roleName = stringToRole(roleStr);
+        roleName = roleStr;
         
         // 清空现有密钥
         keys.clear();

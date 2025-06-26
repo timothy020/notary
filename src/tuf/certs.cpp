@@ -48,7 +48,7 @@ parseAllCerts(std::shared_ptr<SignedRoot> signedRoot) {
     IntCertsMap intCerts;
     
     // 对应Go版本的 rootRoles, ok := signedRoot.Signed.Roles[data.CanonicalRootRole]
-    auto rootRoleIt = signedRoot->Signed.Roles.find(RoleName::RootRole);
+    auto rootRoleIt = signedRoot->Signed.Roles.find(ROOT_ROLE);
     if (rootRoleIt == signedRoot->Signed.Roles.end()) {
         utils::GetLogger().Debug("parseAllCerts: tried to parse certificates from invalid root signed data");
         return std::make_pair(LeafCertsMap{}, IntCertsMap{});
@@ -255,7 +255,7 @@ Result<std::shared_ptr<SignedRoot>> ValidateRoot(
     auto signedRoot = signedRootResult.value();
     
     // 第二步：构建root角色（对应Go版本的signedRoot.BuildBaseRole(data.CanonicalRootRole)）
-    auto rootRoleResult = signedRoot->BuildBaseRole(RoleName::RootRole);
+    auto rootRoleResult = signedRoot->BuildBaseRole(ROOT_ROLE);
     if (!rootRoleResult.ok()) {
         utils::GetLogger().Error("ValidateRoot: Failed to build root role: " + rootRoleResult.error().getMessage());
         return Result<std::shared_ptr<SignedRoot>>(rootRoleResult.error());
@@ -297,14 +297,14 @@ Result<std::shared_ptr<SignedRoot>> ValidateRoot(
         
         // 提取之前root的threshold用于签名验证（对应Go版本的prevRootRoleData.Threshold）
         auto prevRootRoles = prevRoot->Signed.Roles;
-        auto prevRootRoleIt = prevRootRoles.find(RoleName::RootRole);
+        auto prevRootRoleIt = prevRootRoles.find(ROOT_ROLE);
         if (prevRootRoleIt == prevRootRoles.end()) {
             throw ErrValidationFail("could not retrieve previous root role data");
         }
         
         // 使用之前root中找到的证书来验证签名（对应Go版本的signed.VerifySignatures）
         auto trustedKeys = utils::CertsToKeys(trustedLeafCerts, allTrustedIntCerts);
-        BaseRole prevRootRole(RoleName::RootRole, prevRootRoleIt->second.Threshold(), {});
+        BaseRole prevRootRole(ROOT_ROLE, prevRootRoleIt->second.Threshold(), {});
         
         // 将map转换为vector用于BaseRole
         std::vector<std::shared_ptr<crypto::PublicKey>> keyVector;
@@ -366,7 +366,7 @@ Result<std::shared_ptr<SignedRoot>> ValidateRoot(
         finalKeyVector.push_back(key);
     }
     
-    BaseRole finalRootRole(RoleName::RootRole, rootRole.Threshold(), finalKeyVector);
+    BaseRole finalRootRole(ROOT_ROLE, rootRole.Threshold(), finalKeyVector);
     // 修复：使用完整的namespace路径
     auto finalVerifyError = notary::crypto::VerifySignatures(*root, finalRootRole);
     if (!finalVerifyError.ok()) {

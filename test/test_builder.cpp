@@ -20,18 +20,18 @@
 //         REQUIRE(builder != nullptr);
         
 //         // 测试初始状态
-//         REQUIRE_FALSE(builder->isLoaded(notary::RoleName::RootRole));
-//         REQUIRE_FALSE(builder->isLoaded(notary::RoleName::TargetsRole));
-//         REQUIRE_FALSE(builder->isLoaded(notary::RoleName::SnapshotRole));
-//         REQUIRE_FALSE(builder->isLoaded(notary::RoleName::TimestampRole));
+//         REQUIRE_FALSE(builder->isLoaded(notary::ROOT_ROLE));
+//         REQUIRE_FALSE(builder->isLoaded(notary::TARGETS_ROLE));
+//         REQUIRE_FALSE(builder->isLoaded(notary::SNAPSHOT_ROLE));
+//         REQUIRE_FALSE(builder->isLoaded(notary::TIMESTAMP_ROLE));
         
 //         // 测试版本获取（未加载时应该返回1）
-//         REQUIRE(builder->getLoadedVersion(notary::RoleName::RootRole) == 1);
-//         REQUIRE(builder->getLoadedVersion(notary::RoleName::TargetsRole) == 1);
+//         REQUIRE(builder->getLoadedVersion(notary::ROOT_ROLE) == 1);
+//         REQUIRE(builder->getLoadedVersion(notary::TARGETS_ROLE) == 1);
 //     }
     
 //     SECTION("ConsistentInfo功能测试") {
-//         notary::RoleName role = notary::RoleName::RootRole;
+//         notary::RoleName role = notary::ROOT_ROLE;
 //         ConsistentInfo info(role);
         
 //         REQUIRE(info.getRoleName() == role);
@@ -69,7 +69,7 @@
         
 //         // 完成后应该拒绝进一步操作
 //         std::vector<uint8_t> dummyContent = {0x7b, 0x7d}; // "{}"
-//         auto loadError = builder->load(notary::RoleName::RootRole, dummyContent, 1, false);
+//         auto loadError = builder->load(notary::ROOT_ROLE, dummyContent, 1, false);
 //         REQUIRE(loadError.hasError());
 //         REQUIRE(loadError.what().find("finished building") != std::string::npos);
 //     }
@@ -80,7 +80,7 @@
 //         // 所有操作都应该返回错误
 //         std::vector<uint8_t> dummyContent = {0x7b, 0x7d}; // "{}"
         
-//         auto loadError = finished.load(notary::RoleName::RootRole, dummyContent, 1, false);
+//         auto loadError = finished.load(notary::ROOT_ROLE, dummyContent, 1, false);
 //         REQUIRE(loadError.hasError());
         
 //         auto updateError = finished.loadRootForUpdate(dummyContent, 1, true);
@@ -96,11 +96,11 @@
 //         REQUIRE_FALSE(finishResult.ok());
         
 //         // 信息方法应该返回默认值
-//         REQUIRE_FALSE(finished.isLoaded(notary::RoleName::RootRole));
-//         REQUIRE(finished.getLoadedVersion(notary::RoleName::RootRole) == 0);
+//         REQUIRE_FALSE(finished.isLoaded(notary::ROOT_ROLE));
+//         REQUIRE(finished.getLoadedVersion(notary::ROOT_ROLE) == 0);
         
-//         auto info = finished.getConsistentInfo(notary::RoleName::RootRole);
-//         REQUIRE(info.getRoleName() == notary::RoleName::RootRole);
+//         auto info = finished.getConsistentInfo(notary::ROOT_ROLE);
+//         REQUIRE(info.getRoleName() == notary::ROOT_ROLE);
 //     }
 // }
 
@@ -118,7 +118,7 @@
         
 //         // 注意：这个测试可能需要根据实际的loadRoot实现来调整
 //         // 因为我们在实现中返回了"not implemented yet"错误
-//         auto error = builder->load(notary::RoleName::RootRole, invalidContent, 1, false);
+//         auto error = builder->load(notary::ROOT_ROLE, invalidContent, 1, false);
 //         REQUIRE(error.hasError());
 //     }
     
@@ -132,7 +132,7 @@
 //         // 引导新的构建器
 //         auto newBuilder = builder->bootstrapNewBuilder();
 //         REQUIRE(newBuilder != nullptr);
-//         REQUIRE_FALSE(newBuilder->isLoaded(notary::RoleName::RootRole));
+//         REQUIRE_FALSE(newBuilder->isLoaded(notary::ROOT_ROLE));
         
 //         // 用新的trust pin配置引导
 //         TrustPinConfig newTrustPin;

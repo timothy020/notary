@@ -15,19 +15,19 @@ namespace storage {
 
 // 密钥信息结构（不包含私钥内容）
 struct KeyInfo {
-    RoleName role;
+    std::string role;
     std::string gun;  // Gun (Globally Unique Name) - 仓库标识符
     
     KeyInfo() = default;
-    KeyInfo(RoleName r, const std::string& g = "") : role(r), gun(g) {}
+    KeyInfo(const std::string& r, const std::string& g = "") : role(r), gun(g) {}
 };
 
 // 缓存的密钥结构
 struct CachedKey {
-    RoleName role;
+    std::string role;
     std::shared_ptr<crypto::PrivateKey> key;
     
-    CachedKey(RoleName r, std::shared_ptr<crypto::PrivateKey> k) : role(r), key(k) {}
+    CachedKey(const std::string& r, std::shared_ptr<crypto::PrivateKey> k) : role(r), key(k) {}
 };
 
 // 密码获取器接口
@@ -62,7 +62,7 @@ public:
     Error AddKey(const KeyInfo& keyInfo, std::shared_ptr<crypto::PrivateKey> privKey);
     
     // 获取密钥
-    Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>> GetKey(const std::string& keyID);
+    Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, std::string>> GetKey(const std::string& keyID);
     
     // 获取密钥信息
     Result<KeyInfo> GetKeyInfo(const std::string& keyID);
@@ -100,7 +100,7 @@ private:
     );
     
     // 获取密钥角色
-    Result<RoleName> getKeyRole(const std::string& keyID);
+    Result<std::string> getKeyRole(const std::string& keyID);
     
     // 密码解密
     Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, std::string>> getPasswdDecryptBytes(

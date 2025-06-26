@@ -30,7 +30,7 @@ struct Target {
 // 带角色信息的目标结构体 (对应Go的TargetWithRole)
 struct TargetWithRole {
     Target target;                // 目标信息
-    RoleName role;                // 角色名称
+    std::string role;                // 角色名称
 };
 
 
@@ -42,7 +42,7 @@ public:
     // 初始化仓库
     Error Initialize(const std::vector<std::string>& rootKeyIDs,
                     const std::vector<std::shared_ptr<crypto::PublicKey>>& rootCerts = {},
-                    const std::vector<RoleName>& serverManagedRoles = {});
+                    const std::vector<std::string>& serverManagedRoles = {});
     
     // 获取加密服务
     std::shared_ptr<CryptoService> GetCryptoService() { return cryptoService_; }
@@ -53,8 +53,8 @@ public:
     // 初始化角色
     std::tuple<BaseRole, BaseRole, BaseRole, BaseRole> 
     initializeRoles(const std::vector<std::shared_ptr<crypto::PublicKey>>& rootKeys,
-                   const std::vector<RoleName>& localRoles,
-                   const std::vector<RoleName>& remoteRoles);
+                   const std::vector<std::string>& localRoles,
+                   const std::vector<std::string>& remoteRoles);
 
     // 更新TUF元数据
     Error updateTUF(bool force = false); // TODO： 需要修改
@@ -72,7 +72,7 @@ public:
     Error RemoveTarget(const std::string& targetName, const std::vector<std::string>& roles = {});
     
     // 列出所有目标 (对应Go的ListTargets)
-    Result<std::vector<TargetWithRole>> ListTargets(const std::vector<RoleName>& roles = {});
+    Result<std::vector<TargetWithRole>> ListTargets(const std::vector<std::string>& roles = {});
                                    
     // 获取changelist的公共接口 (对应Go的GetChangelist)
     std::shared_ptr<changelist::Changelist> GetChangelistPublic() const { return changelist_; }
@@ -97,7 +97,7 @@ public:
     // 移除角色关联的所有现有密钥。如果keyList中没有指定密钥，则创建并添加一个新密钥或委托服务器管理密钥。
     // 如果keyList指定了密钥，则使用这些密钥来签名角色。
     // 这些更改暂存在changelist中，直到调用publish为止。
-    Error RotateKey(RoleName role, bool serverManagesKey, const std::vector<std::string>& keyList = {});
+    Error RotateKey(const std::string& role, bool serverManagesKey, const std::vector<std::string>& keyList = {});
 
     // 发布方法 (对应Go的publish方法)
     // 使用提供的changelist发布变更到远程服务器  
@@ -137,18 +137,18 @@ private:
     // pubKeyListForRotation函数声明 - 对应Go版本的pubKeyListForRotation函数
     // 给定一组新密钥和要轮转的角色，返回要使用的当前密钥列表
     Result<std::vector<std::shared_ptr<crypto::PublicKey>>> pubKeyListForRotation(
-        RoleName role, bool serverManaged, const std::vector<std::string>& newKeys);
+        const std::string& role, bool serverManaged, const std::vector<std::string>& newKeys);
 
 
 
     // pubKeysToCerts函数声明 - 对应Go版本的pubKeysToCerts函数
     // 将公钥转换为证书（对于根密钥）
     Result<std::vector<std::shared_ptr<crypto::PublicKey>>> pubKeysToCerts(
-        RoleName role, const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys);
+        const std::string& role, const std::vector<std::shared_ptr<crypto::PublicKey>>& pubKeys);
 
     // rootFileKeyChange函数声明 - 对应Go版本的rootFileKeyChange函数
     // 为根文件创建密钥变更
-    Error rootFileKeyChange(std::shared_ptr<changelist::Changelist> cl, RoleName role, 
+    Error rootFileKeyChange(std::shared_ptr<changelist::Changelist> cl, const std::string& role, 
                            const std::string& action, const std::vector<std::shared_ptr<crypto::PublicKey>>& keyList);
 
 

@@ -78,7 +78,7 @@ Result<std::tuple<std::string, KeyInfo>> GenericKeyStore::keyInfoFromPEM(
     auto [role, gun, err] = utils::extractPrivateKeyAttributes(pemBytes, false);
     if (err.hasError()) {
         // 如果解析失败，使用默认值
-        role = RoleName::TargetsRole;
+        role = TARGETS_ROLE;
         gun = "";
     }
     
@@ -91,7 +91,7 @@ Error GenericKeyStore::AddKey(const KeyInfo& keyInfo, std::shared_ptr<crypto::Pr
     
     // 根据Go语言逻辑：如果是root角色或delegation角色，清空gun
     KeyInfo adjustedKeyInfo = keyInfo;
-    if (adjustedKeyInfo.role == RoleName::RootRole) {
+    if (adjustedKeyInfo.role == ROOT_ROLE) {
         adjustedKeyInfo.gun = "";
     }
     
@@ -105,7 +105,7 @@ Error GenericKeyStore::AddKey(const KeyInfo& keyInfo, std::shared_ptr<crypto::Pr
     for (int attempts = 0; ; attempts++) {
         std::tie(chosenPassphrase, giveup, err) = passRetriever_(
             keyID, 
-            roleToString(adjustedKeyInfo.role), 
+            adjustedKeyInfo.role, 
             true, 
             attempts
         );
@@ -124,7 +124,7 @@ Error GenericKeyStore::AddKey(const KeyInfo& keyInfo, std::shared_ptr<crypto::Pr
     try {
         pemPrivKeyStr = utils::ConvertPrivateKeyToPKCS8(
             privKey, 
-            roleToString(adjustedKeyInfo.role), 
+            adjustedKeyInfo.role, 
             adjustedKeyInfo.gun, 
             chosenPassphrase
         );
@@ -144,18 +144,20 @@ Error GenericKeyStore::AddKey(const KeyInfo& keyInfo, std::shared_ptr<crypto::Pr
     }
     
     // 更新密钥信息映射
-    keyInfoMap_[keyID] = adjustedKeyInfo;
+    keyInfoMap_.emplace(keyID, adjustedKeyInfo);
     
     return Error(); // 成功
 }
 
-Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>> GenericKeyStore::GetKey(const std::string& keyID) {
+auto GenericKeyStore::GetKey(const std::string& keyID) -> Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, std::string>> {
+    using ReturnType = Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, std::string>>;
+    
     std::lock_guard<std::mutex> lock(mutex_);
     
     // 检查缓存
     auto cachedIt = cachedKeys_.find(keyID);
     if (cachedIt != cachedKeys_.end()) {
-        return Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>>(
+        return ReturnType(
             std::make_tuple(cachedIt->second->key, cachedIt->second->role)
         );
     }
@@ -163,14 +165,14 @@ Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>> GenericKeyStor
     // 从存储获取角色信息
     auto roleResult = getKeyRole(keyID);
     if (!roleResult.ok()) {
-        return Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>>(roleResult.error());
+        return ReturnType(roleResult.error());
     }
-    RoleName role = roleResult.value();
+    std::string role = roleResult.value();
     
     // 从存储获取密钥内容
     auto keyBytesResult = store_->Get(keyID);
     if (!keyBytesResult.ok()) {
-        return Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>>(keyBytesResult.error());
+        return ReturnType(keyBytesResult.error());
     }
     auto keyBytes = keyBytesResult.value();
     
@@ -180,15 +182,15 @@ Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>> GenericKeyStor
         // 解析成功，将密钥添加到缓存并返回
         auto privKey = parseResult.value();
         cachedKeys_[keyID] = std::make_unique<CachedKey>(role, privKey);
-        return Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>>(
+        return ReturnType(
             std::make_tuple(privKey, role)
         );
     }
     
     // 如果无密码解析失败，则尝试使用密码解密
-    auto decryptResult = getPasswdDecryptBytes(keyBytes, keyID, roleToString(role));
+    auto decryptResult = getPasswdDecryptBytes(keyBytes, keyID, role);
     if (!decryptResult.ok()) {
-        return Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>>(decryptResult.error());
+        return ReturnType(decryptResult.error());
     }
     
     auto [privKey, passwd] = decryptResult.value();
@@ -196,7 +198,7 @@ Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>> GenericKeyStor
     // 缓存密钥
     cachedKeys_[keyID] = std::make_unique<CachedKey>(role, privKey);
     
-    return Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, RoleName>>(
+    return ReturnType(
         std::make_tuple(privKey, role)
     );
 }
@@ -235,11 +237,11 @@ std::string GenericKeyStore::Name() const {
     return store_->Location();
 }
 
-Result<RoleName> GenericKeyStore::getKeyRole(const std::string& keyID) {
+Result<std::string> GenericKeyStore::getKeyRole(const std::string& keyID) {
     // 首先尝试从keyInfoMap获取
     auto it = keyInfoMap_.find(keyID);
     if (it != keyInfoMap_.end()) {
-        return Result<RoleName>(it->second.role);
+        return Result<std::string>(it->second.role);
     }
     
     // 遍历存储中的文件
@@ -259,11 +261,11 @@ Result<RoleName> GenericKeyStore::getKeyRole(const std::string& keyID) {
             }
             
             auto [foundKeyID, keyInfo] = keyInfoResult.value();
-            return Result<RoleName>(keyInfo.role);
+            return Result<std::string>(keyInfo.role);
         }
     }
     
-    return Result<RoleName>(Error("Key not found: " + keyID));
+    return Result<std::string>(Error("Key not found: " + keyID));
 }
 
 Result<std::tuple<std::shared_ptr<crypto::PrivateKey>, std::string>> GenericKeyStore::getPasswdDecryptBytes(

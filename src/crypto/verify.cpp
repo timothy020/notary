@@ -29,7 +29,7 @@ bool IsExpired(const std::chrono::time_point<std::chrono::system_clock>& t) {
 }
 
 // VerifyExpiry 如果元数据过期则返回错误
-Error VerifyExpiry(const notary::tuf::SignedCommon& s, RoleName role) {
+Error VerifyExpiry(const notary::tuf::SignedCommon& s, const std::string& role) {
     if (IsExpired(s.Expires)) {
         // 格式化过期时间
         auto time_t = std::chrono::system_clock::to_time_t(s.Expires);
@@ -37,7 +37,7 @@ Error VerifyExpiry(const notary::tuf::SignedCommon& s, RoleName role) {
         oss << std::put_time(std::localtime(&time_t), "%a %b %d %H:%M:%S %Z %Y");
         
         // 这里应该使用ErrExpired异常，但由于我们使用Error类型，暂时返回Error
-        return Error("Metadata for " + roleToString(role) + " expired on " + oss.str());
+        return Error("Metadata for " + role + " expired on " + oss.str());
     }
     return Error();
 }
@@ -103,7 +103,7 @@ Error VerifySignatures(notary::tuf::Signed& s, const BaseRole& roleData) {
         }
         
         if (static_cast<int>(valid.size()) < roleData.Threshold()) {
-            return Error("valid signatures did not meet threshold for " + roleToString(roleData.Name()));
+            return Error("valid signatures did not meet threshold for " + roleData.Name());
         }
 
         return Error(); // 成功
