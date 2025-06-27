@@ -742,5 +742,22 @@ std::string getParentRole(const std::string& role) {
     std::string parentStr = strRole.substr(0, lastSlash);
     return parentStr;
 }
+
+// 辅助函数：将vector转换为字符串表示（用于日志记录）
+std::string vectorToString(const std::vector<std::string>& vec) {
+    if (vec.empty()) {
+        return "[]";
+    }
+    
+    std::string result = "[";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += "\"" + vec[i] + "\"";
+    }
+    result += "]";
+    return result;
+}
 }
 }

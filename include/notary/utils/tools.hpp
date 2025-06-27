@@ -87,6 +87,8 @@ Result<std::shared_ptr<crypto::PrivateKey>> convertEVPKeyToTufKey(EVP_PKEY* evpK
 std::string getParentRole(const std::string& role);
 // 清理路径
 std::string cleanPath(const std::string& path);
+// 将vector转换为字符串表示（用于日志记录）
+std::string vectorToString(const std::vector<std::string>& vec);
 
 }
 }

@@ -374,6 +374,18 @@ private:
                                         const std::vector<BaseRole>& roles, 
                                         const std::vector<std::shared_ptr<crypto::PublicKey>>& optionalKeys = {});
     
+    // 委托更新辅助方法
+    WalkVisitorFunc createDelegationUpdateVisitor(
+        const std::string& roleName,
+        const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys,
+        const std::vector<std::string>& removeKeys,
+        const std::vector<std::string>& addPaths,
+        const std::vector<std::string>& removePaths,
+        bool clearAllPaths,
+        int newThreshold);
+    
+    void removeUnusedKeys(std::shared_ptr<SignedTargets> tgt);
+    
     // 辅助方法
     bool isValidPath(const std::string& candidatePath, const DelegationRole& delgRole) const;
     bool isAncestorRole(const std::string& candidateChild, const std::string& candidateAncestor) const;

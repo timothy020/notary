@@ -2,12 +2,90 @@
 #include "notary/tuf/repo.hpp"
 #include "notary/crypto/keys.hpp"
 #include "notary/utils/tools.hpp"
+#include "notary/utils/x509.hpp"
 #include <openssl/evp.h>
 #include <openssl/ec.h>
 #include <openssl/pem.h>
+#include <nlohmann/json.hpp>
 
 namespace notary {
 namespace utils {
+
+using json = nlohmann::json;
+
+// TUFDelegation结构体 - 对应Go的changelist.TUFDelegation
+// 从delegation.cpp移植过来
+struct TUFDelegation {
+    int NewThreshold = 0;                                    // 新阈值
+    std::vector<std::shared_ptr<crypto::PublicKey>> AddKeys; // 要添加的密钥
+    std::vector<std::string> RemoveKeys;                     // 要移除的密钥ID
+    std::vector<std::string> AddPaths;                       // 要添加的路径
+    std::vector<std::string> RemovePaths;                    // 要移除的路径  
+    bool ClearAllPaths = false;                              // 是否清除所有路径
+
+    // 从JSON数据反序列化
+    static std::pair<TUFDelegation, Error> Deserialize(const std::vector<uint8_t>& data) {
+        TUFDelegation result;
+        
+        try {
+            // 将二进制数据转换为字符串
+            std::string jsonStr(data.begin(), data.end());
+            
+            // 解析JSON
+            json j = json::parse(jsonStr);
+            
+            // 解析阈值
+            if (j.contains("Threshold")) {
+                result.NewThreshold = j["Threshold"].get<int>();
+            }
+            
+            // 解析要添加的密钥
+            if (j.contains("addKeys")) {
+                for (const auto& keyJson : j["addKeys"]) {
+                    std::string keyID = keyJson["id"].get<std::string>();
+                    std::string keyType = keyJson["keytype"].get<std::string>();
+                    std::string publicBase64 = keyJson["public"].get<std::string>();
+                    
+                    // Base64解码公钥数据
+                    std::vector<uint8_t> publicData = utils::Base64Decode(publicBase64);
+                    
+                    // 使用工厂函数创建PublicKey对象
+                    auto key = crypto::NewPublicKey(keyType, publicData);
+                    if (!key) {
+                        return {TUFDelegation(), Error("Failed to create public key")};
+                    }
+                    
+                    result.AddKeys.push_back(key);
+                }
+            }
+            
+            // 解析要移除的密钥ID
+            if (j.contains("removeKeys")) {
+                result.RemoveKeys = j["removeKeys"].get<std::vector<std::string>>();
+            }
+            
+            // 解析要添加的路径
+            if (j.contains("addPaths")) {
+                result.AddPaths = j["addPaths"].get<std::vector<std::string>>();
+            }
+            
+            // 解析要移除的路径
+            if (j.contains("removePaths")) {
+                result.RemovePaths = j["removePaths"].get<std::vector<std::string>>();
+            }
+            
+            // 解析是否清除所有路径
+            if (j.contains("clearAllPaths")) {
+                result.ClearAllPaths = j["clearAllPaths"].get<bool>();
+            }
+            
+            return {result, Error()};
+            
+        } catch (const std::exception& e) {
+            return {TUFDelegation(), Error(std::string("Failed to deserialize TUFDelegation: ") + e.what())};
+        }
+    }
+};
 
 // 获取角色的默认过期时间
 std::chrono::system_clock::time_point getDefaultExpiry(const std::string& role) {
@@ -219,9 +297,126 @@ Error changeTargetMeta(std::shared_ptr<tuf::Repo> repo,
 // changeTargetsDelegation函数实现 (对应Go的changeTargetsDelegation函数)
 Error changeTargetsDelegation(std::shared_ptr<tuf::Repo> repo, 
                                 std::shared_ptr<changelist::Change> change) {
-    // TODO: 实现委托变更逻辑
-    // 这需要解析TUFDelegation结构并调用相应的repo方法
-    return Error("Delegation changes not yet implemented");
+    if (!repo || !change) {
+        return Error("Invalid parameters");
+    }
+    
+    std::string action = change->Action();
+    std::string scope = change->Scope();
+    
+    try {
+        if (action == changelist::ActionCreate) {
+            // 解析TUFDelegation (对应Go的json.Unmarshal(c.Content(), &td))
+            auto [td, deserializeErr] = TUFDelegation::Deserialize(change->Content());
+            if (!deserializeErr.ok()) {
+                return Error("Failed to deserialize TUFDelegation: " + deserializeErr.what());
+            }
+            
+            utils::GetLogger().Debug("Creating delegation", utils::LogContext()
+                .With("scope", scope)
+                .With("threshold", std::to_string(td.NewThreshold))
+                .With("addKeysCount", std::to_string(td.AddKeys.size()))
+                .With("addPathsCount", std::to_string(td.AddPaths.size())));
+            
+            // 尝试创建全新角色或更新现有角色
+            // 首先添加密钥，然后添加路径。在此场景中只能添加密钥和路径
+            // (对应Go的repo.UpdateDelegationKeys(c.Scope(), td.AddKeys, []string{}, td.NewThreshold))
+            auto keysErr = repo->UpdateDelegationKeys(scope, td.AddKeys, {}, td.NewThreshold);
+            if (!keysErr.ok()) {
+                return keysErr;
+            }
+            
+            // (对应Go的return repo.UpdateDelegationPaths(c.Scope(), td.AddPaths, []string{}, false))
+            return repo->UpdateDelegationPaths(scope, td.AddPaths, {}, false);
+            
+        } else if (action == changelist::ActionUpdate) {
+            // 解析TUFDelegation (对应Go的json.Unmarshal(c.Content(), &td))
+            auto [td, deserializeErr] = TUFDelegation::Deserialize(change->Content());
+            if (!deserializeErr.ok()) {
+                return Error("Failed to deserialize TUFDelegation: " + deserializeErr.what());
+            }
+            
+            // 检查是否是通配符委托 (对应Go的if data.IsWildDelegation(c.Scope()))
+            if (tuf::IsWildDelegation(scope)) {
+                utils::GetLogger().Debug("Purging keys from wild delegation", utils::LogContext()
+                    .With("scope", scope)
+                    .With("removeKeysCount", std::to_string(td.RemoveKeys.size())));
+                
+                // (对应Go的return repo.PurgeDelegationKeys(c.Scope(), td.RemoveKeys))
+                return repo->PurgeDelegationKeys(scope, td.RemoveKeys);
+            }
+            
+            utils::GetLogger().Debug("Updating delegation", utils::LogContext()
+                .With("scope", scope)
+                .With("threshold", std::to_string(td.NewThreshold))
+                .With("addKeysCount", std::to_string(td.AddKeys.size()))
+                .With("removeKeysCount", std::to_string(td.RemoveKeys.size()))
+                .With("addPathsCount", std::to_string(td.AddPaths.size()))
+                .With("removePathsCount", std::to_string(td.RemovePaths.size()))
+                .With("clearAllPaths", td.ClearAllPaths ? "true" : "false"));
+            
+            // 获取委托角色信息 (对应Go的delgRole, err := repo.GetDelegationRole(c.Scope()))
+            auto delegationRoleResult = repo->GetDelegationRole(scope);
+            if (!delegationRoleResult.ok()) {
+                return delegationRoleResult.error();
+            }
+            
+            auto delegationRole = delegationRoleResult.value();
+            
+            // 我们需要将密钥从canonical ID转换为TUF ID以兼容
+            // (对应Go的canonicalToTUFID := make(map[string]string))
+            std::map<std::string, std::string> canonicalToTUFID;
+            
+            // (对应Go的for tufID, pubKey := range delgRole.Keys)
+            // 注意：由于C++版本的BaseRole.Keys()返回vector而不是map，我们需要不同的处理方式
+            // 我们从委托角色的密钥中构建映射
+            const auto& keys = delegationRole.BaseRoleInfo.Keys();
+            for (size_t i = 0; i < keys.size(); ++i) {
+                const auto& pubKey = keys[i];
+                std::string tufID = pubKey->ID(); // 使用密钥的ID作为TUF ID
+                
+                // (对应Go的canonicalID, err := utils.CanonicalKeyID(pubKey))
+                std::string canonicalID = utils::CanonicalKeyID(pubKey);
+                if (canonicalID.empty()) {
+                    return Error("Failed to get canonical key ID for TUF key: " + tufID);
+                }
+                canonicalToTUFID[canonicalID] = tufID;
+            }
+            
+            // (对应Go的removeTUFKeyIDs := []string{})
+            std::vector<std::string> removeTUFKeyIDs;
+            
+            // (对应Go的for _, canonID := range td.RemoveKeys)
+            for (const std::string& canonID : td.RemoveKeys) {
+                auto it = canonicalToTUFID.find(canonID);
+                if (it != canonicalToTUFID.end()) {
+                    removeTUFKeyIDs.push_back(it->second);
+                }
+            }
+            
+            // 更新委托密钥 (对应Go的repo.UpdateDelegationKeys(...))
+            auto keysErr = repo->UpdateDelegationKeys(scope, td.AddKeys, removeTUFKeyIDs, td.NewThreshold);
+            if (!keysErr.ok()) {
+                return keysErr;
+            }
+            
+            // 更新委托路径 (对应Go的return repo.UpdateDelegationPaths(...))
+            return repo->UpdateDelegationPaths(scope, td.AddPaths, td.RemovePaths, td.ClearAllPaths);
+            
+        } else if (action == changelist::ActionDelete) {
+            utils::GetLogger().Debug("Deleting delegation", utils::LogContext()
+                .With("scope", scope));
+            
+            // (对应Go的return repo.DeleteDelegation(c.Scope()))
+            return repo->DeleteDelegation(scope);
+            
+        } else {
+            return Error("Unsupported action against delegations: " + action);
+        }
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to change targets delegation: ") + e.what());
+    }
 }
 
 // applyRootChange函数实现 (对应Go的applyRootChange函数)

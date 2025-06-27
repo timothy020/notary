@@ -1,5 +1,6 @@
 #include "notary/tuf/repo.hpp"
 #include "notary/utils/tools.hpp"
+#include "notary/utils/x509.hpp"
 #include "notary/crypto/sign.hpp"
 #include <stdexcept>
 #include <algorithm>
@@ -1541,24 +1542,388 @@ bool isValidTimestamp(const Timestamp& timestamp) {
 // 委托管理方法实现
 Error Repo::UpdateDelegationKeys(const std::string& roleName, const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys, 
                                  const std::vector<std::string>& removeKeys, int newThreshold) {
-    // TODO: 实现委托密钥更新
-    return Error("UpdateDelegationKeys not implemented");
+    // 验证是否为有效的委托角色 (对应Go的if !data.IsDelegation(roleName))
+    if (!IsDelegation(roleName)) {
+        return Error("not a valid delegated role: " + roleName);
+    }
+    
+    // 获取父角色名称 (对应Go的parent := roleName.Parent())
+    std::string parent = utils::getParentRole(roleName);
+    
+    utils::GetLogger().Info("UpdateDelegationKeys started", utils::LogContext()
+        .With("roleName", roleName)
+        .With("parent", parent)
+        .With("addKeysCount", std::to_string(addKeys.size()))
+        .With("removeKeysCount", std::to_string(removeKeys.size()))
+        .With("newThreshold", std::to_string(newThreshold)));
+    
+    // 验证是否可以签名父角色 (对应Go的if err := tr.VerifyCanSign(parent); err != nil)
+    auto canSignErr = VerifyCanSign(parent);
+    if (!canSignErr.ok()) {
+        utils::GetLogger().Error("Cannot sign parent role", utils::LogContext()
+            .With("parent", parent)
+            .With("error", canSignErr.what()));
+        return canSignErr;
+    }
+    
+    // 检查父角色的元数据 (对应Go的_, ok := tr.Targets[parent])
+    auto parentTargets = GetTargets(parent);
+    if (!parentTargets) {
+        // 父角色文件可能还不存在 - 如果不存在则创建它 (对应Go的if !ok)
+        utils::GetLogger().Info("Parent targets file does not exist, creating it", utils::LogContext()
+            .With("parent", parent));
+        
+        auto initResult = InitTargets(parent);
+        if (!initResult.ok()) {
+            utils::GetLogger().Error("Failed to initialize parent targets", utils::LogContext()
+                .With("parent", parent)
+                .With("error", initResult.error().what()));
+            return initResult.error();
+        }
+    }
+    
+    // 创建委托更新访问者函数 (对应Go的delegationUpdateVisitor)
+    auto delegationUpdateVisitor = createDelegationUpdateVisitor(roleName, addKeys, removeKeys, 
+                                                               {}, {}, false, newThreshold);
+    
+    // 走到这个委托的父级，因为那里存在其角色元数据
+    // 我们不需要验证walker到达其期望角色，因为我们已经在VerifyCanSign中做了另一次遍历到父角色，
+    // 并且可能创建了targets文件 (对应Go的注释和WalkTargets调用)
+    auto walkErr = WalkTargets("", parent, delegationUpdateVisitor);
+    if (!walkErr.ok()) {
+        utils::GetLogger().Error("Failed to walk targets for delegation update", utils::LogContext()
+            .With("roleName", roleName)
+            .With("parent", parent)
+            .With("error", walkErr.what()));
+        return walkErr;
+    }
+    
+    utils::GetLogger().Info("UpdateDelegationKeys completed successfully", utils::LogContext()
+        .With("roleName", roleName)
+        .With("parent", parent));
+    
+    return Error(); // 成功
 }
 
 Error Repo::PurgeDelegationKeys(const std::string& role, const std::vector<std::string>& removeKeys) {
-    // TODO: 实现委托密钥清理
-    return Error("PurgeDelegationKeys not implemented");
+    // 验证是否为有效的通配符委托角色 (对应Go的if !data.IsWildDelegation(role))
+    if (!IsWildDelegation(role)) {
+        return Error("only wildcard roles can be used in a purge: " + role);
+    }
+    
+    utils::GetLogger().Info("PurgeDelegationKeys started", utils::LogContext()
+        .With("role", role)
+        .With("removeKeysCount", std::to_string(removeKeys.size()))
+        .With("removeKeys", utils::vectorToString(removeKeys)));
+    
+    // 创建要移除的密钥ID映射 (对应Go的removeIDs := make(map[string]struct{}))
+    std::set<std::string> removeIDs;
+    for (const auto& id : removeKeys) {
+        removeIDs.insert(id);
+    }
+    
+    // 获取起始角色，即通配符角色的父角色 (对应Go的start := role.Parent())
+    std::string start = utils::getParentRole(role);
+    
+    // TUF ID到规范ID的映射缓存 (对应Go的tufIDToCanon := make(map[string]string))
+    std::map<std::string, std::string> tufIDToCanon;
+    
+    // 创建清理密钥的访问者函数 (对应Go的purgeKeys := func)
+    auto purgeKeys = [&](std::shared_ptr<SignedTargets> tgt, const DelegationRole& validRole) -> WalkResult {
+        if (!tgt) {
+            return Error("SignedTargets is null");
+        }
+        
+        utils::GetLogger().Debug("Processing purge for role", utils::LogContext()
+            .With("validRole", validRole.Name)
+            .With("delegationKeysCount", std::to_string(tgt->Signed.delegations.Keys.size())));
+        
+        std::vector<std::string> deleteCandidates;
+        
+        // 遍历委托中的所有密钥 (对应Go的for id, key := range tgt.Signed.Delegations.Keys)
+        for (const auto& [id, key] : tgt->Signed.delegations.Keys) {
+            std::string canonID;
+            
+            // 检查是否已缓存规范ID (对应Go的if canonID, ok = tufIDToCanon[id]; !ok)
+            auto canonIt = tufIDToCanon.find(id);
+            if (canonIt != tufIDToCanon.end()) {
+                canonID = canonIt->second;
+            } else {
+                // 计算规范密钥ID (对应Go的canonID, err := utils.CanonicalKeyID(key))
+                canonID = utils::CanonicalKeyID(key);
+                if (canonID.empty()) {
+                    return Error("Failed to compute canonical key ID for key: " + id);
+                }
+                tufIDToCanon[id] = canonID;
+            }
+            
+            // 检查是否是要删除的密钥 (对应Go的if _, ok := removeIDs[canonID]; ok)
+            if (removeIDs.find(canonID) != removeIDs.end()) {
+                deleteCandidates.push_back(id);
+                utils::GetLogger().Debug("Found key to purge", utils::LogContext()
+                    .With("tufID", id)
+                    .With("canonicalID", canonID));
+            }
+        }
+        
+        // 如果没有要删除的密钥，继续处理下一个角色 (对应Go的if len(deleteCandidates) == 0)
+        if (deleteCandidates.empty()) {
+            utils::GetLogger().Debug("No interesting keys found in this role", utils::LogContext()
+                .With("validRole", validRole.Name));
+            return std::monostate{}; // 继续遍历
+        }
+        
+        // 现在我们知道有变更，检查是否能够签名 (对应Go的if err := tr.VerifyCanSign(validRole.Name); err != nil)
+        auto canSignErr = VerifyCanSign(validRole.Name);
+        if (!canSignErr.ok()) {
+            utils::GetLogger().Warn("Role contains keys being purged but you do not have the necessary keys present to sign it", 
+                utils::LogContext()
+                    .With("role", validRole.Name)
+                    .With("error", canSignErr.what()));
+            return std::monostate{}; // 继续遍历，不做变更
+        }
+        
+        utils::GetLogger().Info("Purging keys from role", utils::LogContext()
+            .With("role", validRole.Name)
+            .With("deleteKeysCount", std::to_string(deleteCandidates.size())));
+        
+        // 我们知道能够签名变更，删除密钥 (对应Go的for _, id := range deleteCandidates)
+        for (const auto& id : deleteCandidates) {
+            auto keyIt = tgt->Signed.delegations.Keys.find(id);
+            if (keyIt != tgt->Signed.delegations.Keys.end()) {
+                tgt->Signed.delegations.Keys.erase(keyIt);
+                utils::GetLogger().Debug("Removed key from delegation keys", utils::LogContext()
+                    .With("keyID", id));
+            }
+        }
+        
+        // 从所有角色中删除候选密钥 (对应Go的for _, role := range tgt.Signed.Delegations.Roles)
+        for (auto& delegationRole : tgt->Signed.delegations.Roles) {
+            auto& roleKeys = delegationRole.BaseRoleInfo.Keys();
+            size_t originalSize = roleKeys.size();
+            
+            // 移除密钥 (对应Go的role.RemoveKeys(deleteCandidates))
+            roleKeys.erase(
+                std::remove_if(roleKeys.begin(), roleKeys.end(),
+                    [&deleteCandidates](const std::shared_ptr<crypto::PublicKey>& key) {
+                        return std::find(deleteCandidates.begin(), deleteCandidates.end(), key->ID()) != deleteCandidates.end();
+                    }),
+                roleKeys.end()
+            );
+            
+            size_t newSize = roleKeys.size();
+            if (originalSize != newSize) {
+                utils::GetLogger().Debug("Removed keys from delegation role", utils::LogContext()
+                    .With("delegationRole", delegationRole.Name)
+                    .With("removedCount", std::to_string(originalSize - newSize)));
+            }
+            
+            // 检查密钥数量是否低于阈值 (对应Go的if len(role.KeyIDs) < role.Threshold)
+            if (static_cast<int>(roleKeys.size()) < delegationRole.BaseRoleInfo.Threshold()) {
+                utils::GetLogger().Warn("Role has fewer keys than its threshold", utils::LogContext()
+                    .With("role", delegationRole.Name)
+                    .With("keyCount", std::to_string(roleKeys.size()))
+                    .With("threshold", std::to_string(delegationRole.BaseRoleInfo.Threshold())));
+            }
+        }
+        
+        // 标记为dirty (对应Go的tgt.Dirty = true)
+        tgt->Dirty = true;
+        
+        return std::monostate{}; // 继续遍历
+    };
+    
+    // 执行遍历 (对应Go的return tr.WalkTargets("", start, purgeKeys))
+    auto walkErr = WalkTargets("", start, purgeKeys);
+    if (!walkErr.ok()) {
+        utils::GetLogger().Error("Failed to walk targets for purging delegation keys", utils::LogContext()
+            .With("role", role)
+            .With("start", start)
+            .With("error", walkErr.what()));
+        return walkErr;
+    }
+    
+    utils::GetLogger().Info("PurgeDelegationKeys completed successfully", utils::LogContext()
+        .With("role", role)
+        .With("start", start));
+    
+    return Error(); // 成功
 }
 
 Error Repo::UpdateDelegationPaths(const std::string& roleName, const std::vector<std::string>& addPaths, 
                                   const std::vector<std::string>& removePaths, bool clearPaths) {
-    // TODO: 实现委托路径更新
-    return Error("UpdateDelegationPaths not implemented");
+    // 验证是否为有效的委托角色 (对应Go的if !data.IsDelegation(roleName))
+    if (!IsDelegation(roleName)) {
+        return Error("not a valid delegated role: " + roleName);
+    }
+    
+    // 获取父角色名称 (对应Go的parent := roleName.Parent())
+    std::string parent = utils::getParentRole(roleName);
+    
+    utils::GetLogger().Info("UpdateDelegationPaths started", utils::LogContext()
+        .With("roleName", roleName)
+        .With("parent", parent)
+        .With("addPathsCount", std::to_string(addPaths.size()))
+        .With("removePathsCount", std::to_string(removePaths.size()))
+        .With("clearPaths", clearPaths ? "true" : "false"));
+    
+    // 验证是否可以签名父角色 (对应Go的if err := tr.VerifyCanSign(parent); err != nil)
+    auto canSignErr = VerifyCanSign(parent);
+    if (!canSignErr.ok()) {
+        utils::GetLogger().Error("Cannot sign parent role", utils::LogContext()
+            .With("parent", parent)
+            .With("error", canSignErr.what()));
+        return canSignErr;
+    }
+    
+    // 检查父角色的元数据 (对应Go的_, ok := tr.Targets[parent])
+    auto parentTargets = GetTargets(parent);
+    if (!parentTargets) {
+        // 如果父目标文件不存在，这是一个错误，因为必须存在委托才能仅编辑路径
+        // (对应Go的if not, this is an error because a delegation must exist to edit only paths)
+        std::string errorMsg = "no valid delegated role exists: " + roleName;
+        utils::GetLogger().Error(errorMsg, utils::LogContext()
+            .With("parent", parent)
+            .With("roleName", roleName));
+        return Error(errorMsg);
+    }
+    
+    // 创建委托更新访问者函数，只更新路径，不添加或移除密钥
+    // (对应Go的delegationUpdateVisitor(roleName, data.KeyList{}, []string{}, addPaths, removePaths, clearPaths, notary.MinThreshold))
+    auto delegationUpdateVisitor = createDelegationUpdateVisitor(
+        roleName, 
+        {}, // 空密钥列表 - 不添加密钥
+        {}, // 空移除密钥列表 - 不移除密钥
+        addPaths, 
+        removePaths, 
+        clearPaths, 
+        1 // MinThreshold - 最小阈值，但在路径更新时不会改变阈值
+    );
+    
+    // 走到这个委托的父级，因为那里存在其角色元数据
+    // 我们不需要验证walker到达其期望角色，因为我们已经在VerifyCanSign中做了另一次遍历到父角色
+    // (对应Go的注释和WalkTargets调用)
+    auto walkErr = WalkTargets("", parent, delegationUpdateVisitor);
+    if (!walkErr.ok()) {
+        utils::GetLogger().Error("Failed to walk targets for delegation paths update", utils::LogContext()
+            .With("roleName", roleName)
+            .With("parent", parent)
+            .With("error", walkErr.what()));
+        return walkErr;
+    }
+    
+    utils::GetLogger().Info("UpdateDelegationPaths completed successfully", utils::LogContext()
+        .With("roleName", roleName)
+        .With("parent", parent));
+    
+    return Error(); // 成功
 }
 
 Error Repo::DeleteDelegation(const std::string& roleName) {
-    // TODO: 实现委托删除
-    return Error("DeleteDelegation not implemented");
+    // 验证是否为有效的委托角色 (对应Go的if !data.IsDelegation(roleName))
+    if (!IsDelegation(roleName)) {
+        return Error("not a valid delegated role: " + roleName);
+    }
+    
+    // 获取父角色名称 (对应Go的parent := roleName.Parent())
+    std::string parent = utils::getParentRole(roleName);
+    
+    utils::GetLogger().Info("DeleteDelegation started", utils::LogContext()
+        .With("roleName", roleName)
+        .With("parent", parent));
+    
+    // 验证是否可以签名父角色 (对应Go的if err := tr.VerifyCanSign(parent); err != nil)
+    auto canSignErr = VerifyCanSign(parent);
+    if (!canSignErr.ok()) {
+        utils::GetLogger().Error("Cannot sign parent role", utils::LogContext()
+            .With("parent", parent)
+            .With("error", canSignErr.what()));
+        return canSignErr;
+    }
+    
+    // 从Targets映射和Snapshot中删除委托数据 - 如果它们不存在，这些是无操作
+    // (对应Go的delete delegated data from Targets map and Snapshot - if they don't exist, these are no-op)
+    auto targetsIt = targets_.find(roleName);
+    if (targetsIt != targets_.end()) {
+        targets_.erase(targetsIt);
+        utils::GetLogger().Debug("Removed delegation from targets map", utils::LogContext()
+            .With("roleName", roleName));
+    }
+    
+    // 从快照中删除元数据 (对应Go的tr.Snapshot.DeleteMeta(roleName))
+    if (snapshot_) {
+        snapshot_->DeleteMeta(roleName);
+        utils::GetLogger().Debug("Removed delegation meta from snapshot", utils::LogContext()
+            .With("roleName", roleName));
+    }
+    
+    // 获取父角色的targets (对应Go的p, ok := tr.Targets[parent])
+    auto parentTargets = GetTargets(parent);
+    if (!parentTargets) {
+        // 如果没有父元数据（角色虽然存在），那么这就算完成了
+        // (对应Go的if there is no parent metadata (the role exists though), then this is as good as done)
+        utils::GetLogger().Info("Parent metadata does not exist, deletion considered complete", utils::LogContext()
+            .With("parent", parent)
+            .With("roleName", roleName));
+        return Error(); // 成功
+    }
+    
+    // 查找要删除的角色在委托列表中的索引 (对应Go的foundAt := utils.FindRoleIndex)
+    int foundAt = -1;
+    for (size_t i = 0; i < parentTargets->Signed.delegations.Roles.size(); ++i) {
+        if (parentTargets->Signed.delegations.Roles[i].Name == roleName) {
+            foundAt = static_cast<int>(i);
+            break;
+        }
+    }
+    
+    if (foundAt >= 0) {
+        utils::GetLogger().Debug("Found delegation role to delete", utils::LogContext()
+            .With("roleName", roleName)
+            .With("index", std::to_string(foundAt)));
+        
+        // 从委托角色列表中移除角色 (对应Go的slice out deleted role)
+        auto& roles = parentTargets->Signed.delegations.Roles;
+        
+        // 创建新的角色列表，排除要删除的角色
+        // (对应Go的roles = append(roles, p.Signed.Delegations.Roles[:foundAt]...)
+        //     if foundAt+1 < len(p.Signed.Delegations.Roles) { roles = append(roles, p.Signed.Delegations.Roles[foundAt+1:]...) })
+        std::vector<DelegationRole> newRoles;
+        
+        // 添加删除位置之前的角色
+        for (int i = 0; i < foundAt; ++i) {
+            newRoles.push_back(roles[i]);
+        }
+        
+        // 添加删除位置之后的角色
+        for (size_t i = foundAt + 1; i < roles.size(); ++i) {
+            newRoles.push_back(roles[i]);
+        }
+        
+        // 替换角色列表
+        roles = std::move(newRoles);
+        
+        // 移除未使用的密钥 (对应Go的utils.RemoveUnusedKeys(p))
+        removeUnusedKeys(parentTargets);
+        
+        // 标记为dirty (对应Go的p.Dirty = true)
+        parentTargets->Dirty = true;
+        
+        utils::GetLogger().Info("Successfully removed delegation role", utils::LogContext()
+            .With("roleName", roleName)
+            .With("remainingRolesCount", std::to_string(roles.size())));
+    } else {
+        // 如果角色没有找到，它就算已经删除了 (对应Go的if the role wasn't found, it's a good as deleted)
+        utils::GetLogger().Info("Delegation role not found in parent, considered already deleted", utils::LogContext()
+            .With("roleName", roleName)
+            .With("parent", parent));
+    }
+    
+    utils::GetLogger().Info("DeleteDelegation completed successfully", utils::LogContext()
+        .With("roleName", roleName)
+        .With("parent", parent));
+    
+    return Error(); // 成功
 }
 
 // 元数据更新方法实现
@@ -1813,6 +2178,207 @@ Result<std::shared_ptr<Signed>> Repo::SignTimestamp(const std::chrono::time_poin
 }
 
 // 私有方法实现
+
+// createDelegationUpdateVisitor 创建委托更新访问者函数 (对应Go的delegationUpdateVisitor)
+WalkVisitorFunc Repo::createDelegationUpdateVisitor(
+    const std::string& roleName,
+    const std::vector<std::shared_ptr<crypto::PublicKey>>& addKeys,
+    const std::vector<std::string>& removeKeys,
+    const std::vector<std::string>& addPaths,
+    const std::vector<std::string>& removePaths,
+    bool clearAllPaths,
+    int newThreshold) {
+    
+    return [=](std::shared_ptr<SignedTargets> tgt, const DelegationRole& validRole) -> WalkResult {
+        if (!tgt) {
+            return Error("SignedTargets is null");
+        }
+        
+        utils::GetLogger().Debug("Processing delegation update", utils::LogContext()
+            .With("roleName", roleName)
+            .With("validRole", validRole.Name)
+            .With("addKeysCount", std::to_string(addKeys.size()))
+            .With("removeKeysCount", std::to_string(removeKeys.size())));
+        
+        // 验证在这个受限制的validRole下添加路径的变更，拒绝无效的路径添加
+        // (对应Go的if len(addPaths) != len(data.RestrictDelegationPathPrefixes(validRole.Paths, addPaths)))
+        auto restrictedPaths = RestrictDelegationPathPrefixes(validRole.Paths, addPaths);
+        if (restrictedPaths.size() != addPaths.size()) {
+            std::string errorMsg = "invalid paths to add to role: " + roleName;
+            utils::GetLogger().Error(errorMsg, utils::LogContext()
+                .With("validRolePaths", utils::vectorToString(validRole.Paths))
+                .With("addPaths", utils::vectorToString(addPaths))
+                .With("restrictedPaths", utils::vectorToString(restrictedPaths)));
+            return Error(errorMsg);
+        }
+        
+        // 尝试找到委托并使用我们的变更列表修改它 (对应Go的Try to find the delegation and amend it)
+        DelegationRole* delgRole = nullptr;
+        DelegationRole workingRole; // 工作副本
+        
+        for (auto& role : tgt->Signed.delegations.Roles) {
+            if (role.Name == roleName) {
+                utils::GetLogger().Debug("Found existing delegation role", utils::LogContext()
+                    .With("roleName", roleName));
+                
+                // 制作副本并操作这个角色直到我们验证变更 (对应Go的Make a copy and operate on this role)
+                workingRole = role; // 复制构造
+                
+                // 移除路径 (对应Go的delgRole.RemovePaths(removePaths))
+                for (const auto& removePath : removePaths) {
+                    auto it = std::find(workingRole.Paths.begin(), workingRole.Paths.end(), removePath);
+                    if (it != workingRole.Paths.end()) {
+                        workingRole.Paths.erase(it);
+                    }
+                }
+                
+                // 清除所有路径 (对应Go的if clearAllPaths)
+                if (clearAllPaths) {
+                    workingRole.Paths.clear();
+                }
+                
+                // 添加路径 (对应Go的delgRole.AddPaths(addPaths))
+                for (const auto& addPath : addPaths) {
+                    if (std::find(workingRole.Paths.begin(), workingRole.Paths.end(), addPath) == workingRole.Paths.end()) {
+                        workingRole.Paths.push_back(addPath);
+                    }
+                }
+                
+                // 移除密钥 (对应Go的delgRole.RemoveKeys(removeKeys))
+                auto& roleKeys = workingRole.BaseRoleInfo.Keys();
+                for (const auto& removeKeyID : removeKeys) {
+                    roleKeys.erase(
+                        std::remove_if(roleKeys.begin(), roleKeys.end(),
+                            [&removeKeyID](const std::shared_ptr<crypto::PublicKey>& key) {
+                                return key->ID() == removeKeyID;
+                            }),
+                        roleKeys.end()
+                    );
+                }
+                
+                delgRole = &workingRole;
+                break;
+            }
+        }
+        
+        // 我们之前没有找到角色，所以创建它 (对应Go的We didn't find the role earlier, so create it)
+        if (delgRole == nullptr) {
+            utils::GetLogger().Debug("Creating new delegation role", utils::LogContext()
+                .With("roleName", roleName)
+                .With("newThreshold", std::to_string(newThreshold)));
+            
+            // 创建新角色 (对应Go的data.NewRole)
+            std::vector<std::string> addKeyIDs;
+            for (const auto& key : addKeys) {
+                addKeyIDs.push_back(key->ID());
+            }
+            
+            // 创建BaseRole
+            BaseRole newBaseRole(roleName, newThreshold, addKeys);
+            
+            // 创建DelegationRole
+            workingRole.Name = roleName;
+            workingRole.BaseRoleInfo = newBaseRole;
+            workingRole.Paths = addPaths;
+            
+            delgRole = &workingRole;
+        }
+        
+        // 将密钥ID添加到角色，将密钥本身添加到父级 (对应Go的Add the key IDs to the role and the keys themselves to the parent)
+        auto& roleKeys = delgRole->BaseRoleInfo.Keys();
+        for (const auto& key : addKeys) {
+            // 检查密钥是否已存在 (对应Go的if !utils.StrSliceContains(delgRole.KeyIDs, k.ID()))
+            bool keyExists = false;
+            for (const auto& existingKey : roleKeys) {
+                if (existingKey->ID() == key->ID()) {
+                    keyExists = true;
+                    break;
+                }
+            }
+            
+            if (!keyExists) {
+                roleKeys.push_back(key);
+            }
+        }
+        
+        // 确保我们仍然有一个有效的角色 (对应Go的Make sure we have a valid role still)
+        if (static_cast<int>(roleKeys.size()) < delgRole->BaseRoleInfo.Threshold()) {
+            utils::GetLogger().Warn("Role has fewer keys than its threshold", utils::LogContext()
+                .With("roleName", delgRole->Name)
+                .With("keyCount", std::to_string(roleKeys.size()))
+                .With("threshold", std::to_string(delgRole->BaseRoleInfo.Threshold())));
+        }
+        
+        // 注意：这个闭包在这点之后不能出错，因为我们已经承诺编辑repo对象中的SignedTargets元数据
+        // 与更新此委托相关的任何错误必须在此点之前发生 (对应Go的注释)
+        
+        // 如果我们所有的变更都有效，我们应该编辑实际的SignedTargets以匹配我们的副本
+        // (对应Go的If all of our changes were valid, we should edit the actual SignedTargets to match our copy)
+        
+        // 添加密钥到父级委托密钥映射 (对应Go的for _, k := range addKeys)
+        for (const auto& key : addKeys) {
+            tgt->Signed.delegations.Keys[key->ID()] = key;
+        }
+        
+        // 查找并更新或添加角色 (对应Go的foundAt := utils.FindRoleIndex)
+        bool found = false;
+        for (size_t i = 0; i < tgt->Signed.delegations.Roles.size(); ++i) {
+            if (tgt->Signed.delegations.Roles[i].Name == delgRole->Name) {
+                tgt->Signed.delegations.Roles[i] = *delgRole;
+                found = true;
+                utils::GetLogger().Debug("Updated existing delegation role", utils::LogContext()
+                    .With("roleName", delgRole->Name)
+                    .With("index", std::to_string(i)));
+                break;
+            }
+        }
+        
+        if (!found) {
+            tgt->Signed.delegations.Roles.push_back(*delgRole);
+            utils::GetLogger().Debug("Added new delegation role", utils::LogContext()
+                .With("roleName", delgRole->Name));
+        }
+        
+        // 标记为dirty (对应Go的tgt.Dirty = true)
+        tgt->Dirty = true;
+        
+        // 移除未使用的密钥 (对应Go的utils.RemoveUnusedKeys(tgt))
+        removeUnusedKeys(tgt);
+        
+        utils::GetLogger().Debug("Delegation update completed successfully", utils::LogContext()
+            .With("roleName", roleName));
+        
+        return StopWalk{}; // 停止遍历 (对应Go的return StopWalk{})
+    };
+}
+
+// removeUnusedKeys 移除未使用的密钥 (对应Go的utils.RemoveUnusedKeys)
+void Repo::removeUnusedKeys(std::shared_ptr<SignedTargets> tgt) {
+    if (!tgt) {
+        return;
+    }
+    
+    // 收集所有正在使用的密钥ID
+    std::set<std::string> usedKeyIDs;
+    for (const auto& role : tgt->Signed.delegations.Roles) {
+        for (const auto& key : role.BaseRoleInfo.Keys()) {
+            usedKeyIDs.insert(key->ID());
+        }
+    }
+    
+    // 移除未使用的密钥
+    auto& keys = tgt->Signed.delegations.Keys;
+    for (auto it = keys.begin(); it != keys.end();) {
+        if (usedKeyIDs.find(it->first) == usedKeyIDs.end()) {
+            utils::GetLogger().Debug("Removing unused delegation key", utils::LogContext()
+                .With("keyID", it->first));
+            it = keys.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void Repo::markRoleDirty(const std::string& role) {
     if (role == SNAPSHOT_ROLE) {
         if (snapshot_) {
