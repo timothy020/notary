@@ -87,6 +87,11 @@ public:
     
     // 通过名称获取目标 (对应Go的GetTargetByName)
     Result<Target> GetTargetByName(const std::string& targetName);
+    
+    // 获取委托角色 (对应Go的GetDelegationRoles)
+    // 返回仓库委托的密钥和角色
+    // 同时将密钥ID转换为规范密钥ID以与签名提示保持一致
+    Result<std::vector<tuf::DelegationRole>> GetDelegationRoles();
 
     // 删除信任数据 (对应Go的DeleteTrustData)
     static Error DeleteTrustData(const std::string& baseDir, const GUN& gun, 

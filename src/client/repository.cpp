@@ -857,6 +857,58 @@ Result<Target> Repository::GetTargetByName(const std::string& targetName) {
     }
 }
 
+// 获取委托角色 (对应Go的GetDelegationRoles)
+Result<std::vector<tuf::DelegationRole>> Repository::GetDelegationRoles() {
+    try {
+        // 首先更新TUF元数据 (对应Go的if err := r.updateTUF(false); err != nil)
+        auto updateErr = updateTUF(false);
+        if (!updateErr.ok()) {
+            return Result<std::vector<tuf::DelegationRole>>(updateErr);
+        }
+        
+        // 检查是否已加载targets角色 (对应Go的_, ok := r.tufRepo.Targets[data.CanonicalTargetsRole])
+        auto targetsObj = tufRepo_->GetTargets(TARGETS_ROLE);
+        if (!targetsObj) {
+            return Result<std::vector<tuf::DelegationRole>>(
+                Error("targets metadata not found"));
+        }
+        
+        // 创建委托角色列表 (对应Go的allDelegations := []data.Role{})
+        std::vector<tuf::DelegationRole> allDelegations;
+        
+        // 定义访问者函数来填充委托列表并将其密钥ID转换为规范ID
+        // (对应Go的delegationCanonicalListVisitor)
+        tuf::WalkVisitorFunc delegationCanonicalListVisitor = 
+            [&allDelegations](std::shared_ptr<tuf::SignedTargets> tgt, const tuf::DelegationRole& validRole) -> tuf::WalkResult {
+                if (!tgt) {
+                    return std::monostate{}; // 继续遍历
+                }
+                
+                // 获取当前目标的委托 (对应Go的tgt.Signed.Delegations)
+                const auto& delegations = tgt->Signed.delegations;
+                
+                // 添加所有委托角色到列表 (对应Go的allDelegations = append(allDelegations, canonicalDelegations...))
+                for (const auto& role : delegations.Roles) {
+                    // 注意：这里我们直接添加DelegationRole，密钥ID已经在解析时转换为规范格式
+                    allDelegations.push_back(role);
+                }
+                
+                return std::monostate{}; // 继续遍历
+            };
+        
+        // 使用WalkTargets遍历所有委托 (对应Go的err := r.tufRepo.WalkTargets("", "", delegationCanonicalListVisitor))
+        auto walkErr = tufRepo_->WalkTargets("", "", delegationCanonicalListVisitor);
+        if (!walkErr.ok()) {
+            return Result<std::vector<tuf::DelegationRole>>(walkErr);
+        }
+        
+        return Result<std::vector<tuf::DelegationRole>>(allDelegations);
+        
+    } catch (const std::exception& e) {
+        return Result<std::vector<tuf::DelegationRole>>(Error("Failed to get delegation roles: " + std::string(e.what())));
+    }
+}
+
 // 删除信任数据 (对应Go的DeleteTrustData)
 Error Repository::DeleteTrustData(const std::string& baseDir, const GUN& gun, 
                                  const std::string& serverURL, bool deleteRemote) {

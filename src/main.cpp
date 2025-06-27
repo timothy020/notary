@@ -272,6 +272,69 @@ std::vector<std::unique_ptr<storage::GenericKeyStore>> getKeyStores(
     return keyStores;
 }
 
+// 美化打印委托角色列表 (对应Go的prettyPrintRoles函数)
+void prettyPrintRoles(const std::vector<tuf::DelegationRole>& roles, const std::string& roleType = "delegations") {
+    if (roles.empty()) {
+        std::cout << "\nNo " << roleType << " present in this repository." << std::endl;
+        return;
+    }
+    
+    // 计算列宽 (对应Go的计算最大宽度逻辑)
+    size_t maxRoleWidth = 4;     // "ROLE"的长度
+    size_t maxKeysWidth = 4;     // "KEYS"的长度
+    size_t maxThresholdWidth = 9; // "THRESHOLD"的长度
+    size_t maxPathsWidth = 5;    // "PATHS"的长度
+    
+    for (const auto& role : roles) {
+        maxRoleWidth = std::max(maxRoleWidth, role.Name.length());
+        maxKeysWidth = std::max(maxKeysWidth, std::to_string(role.BaseRoleInfo.Keys().size()).length());
+        maxThresholdWidth = std::max(maxThresholdWidth, std::to_string(role.BaseRoleInfo.Threshold()).length());
+        
+        // 计算路径字符串的长度
+        std::string pathsStr = "";
+        for (size_t i = 0; i < role.Paths.size(); ++i) {
+            if (i > 0) pathsStr += ", ";
+            pathsStr += role.Paths[i];
+        }
+        maxPathsWidth = std::max(maxPathsWidth, pathsStr.length());
+    }
+    
+    // 打印表头 (对应Go的fmt.Fprintf)
+    std::cout << std::endl;
+    std::cout << std::left 
+              << std::setw(maxRoleWidth + 2) << "ROLE"
+              << std::setw(maxKeysWidth + 2) << "KEYS"
+              << std::setw(maxThresholdWidth + 2) << "THRESHOLD"
+              << std::setw(maxPathsWidth + 2) << "PATHS"
+              << std::endl;
+    
+    // 打印分隔线
+    std::cout << std::string(maxRoleWidth + 2, '-') 
+              << std::string(maxKeysWidth + 2, '-')
+              << std::string(maxThresholdWidth + 2, '-')
+              << std::string(maxPathsWidth + 2, '-')
+              << std::endl;
+    
+    // 打印每个角色 (对应Go的遍历roles逻辑)
+    for (const auto& role : roles) {
+        // 构建路径字符串
+        std::string pathsStr = "";
+        for (size_t i = 0; i < role.Paths.size(); ++i) {
+            if (i > 0) pathsStr += ", ";
+            pathsStr += role.Paths[i];
+        }
+        
+        // 打印角色信息
+        std::cout << std::left
+                  << std::setw(maxRoleWidth + 2) << role.Name
+                  << std::setw(maxKeysWidth + 2) << role.BaseRoleInfo.Keys().size()
+                  << std::setw(maxThresholdWidth + 2) << role.BaseRoleInfo.Threshold()
+                  << std::setw(maxPathsWidth + 2) << pathsStr
+                  << std::endl;
+    }
+    std::cout << std::endl;
+}
+
 // 美化打印目标列表 (对应Go的prettyPrintTargets函数)
 void prettyPrintTargets(const std::vector<TargetWithRole>& targets) {
     if (targets.empty()) {
@@ -1414,6 +1477,7 @@ int main(int argc, char** argv) {
     auto delegation = app.add_subcommand("delegation", "Manage delegations");
     auto delegationAdd = delegation->add_subcommand("add", "Add a delegation role with public keys and paths");
     auto delegationRemove = delegation->add_subcommand("remove", "Remove delegation keys or paths");
+    auto delegationList = delegation->add_subcommand("list", "List delegations for the Global Unique Name");
     
     // delegation add 参数定义 - 对应Go版本的delegationAdd函数参数
     std::string delegationGUN;
@@ -1448,6 +1512,11 @@ int main(int argc, char** argv) {
     delegationRemove->add_flag("--all", removeAll, "Remove entire delegation");
     delegationRemove->add_flag("-y,--yes", forceYes, "Answer yes to the removal question (no confirmation)");
     delegationRemove->add_flag("-p,--publish", removeAutoPublish, "Auto publish after removing delegation");
+    
+    // delegation list 参数定义 - 对应Go版本的delegationsList函数参数
+    std::string listGUN;
+    
+    delegationList->add_option("gun", listGUN, "Globally Unique Name")->required();
 
     // ======================== key 命令组 ========================
     auto key = app.add_subcommand("key", "Manage signing keys");
@@ -1989,6 +2058,52 @@ int main(int argc, char** argv) {
             
         } catch (const std::exception& e) {
             utils::GetLogger().Error("Error removing delegation: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+    // delegation list 命令实现 - 对应Go版本的delegationsList函数
+    delegationList->callback([&]() {
+        try {
+            // 1. 验证参数 - 需要提供GUN (对应Go的len(args) != 1检查)
+            if (listGUN.empty()) {
+                utils::GetLogger().Error("Please provide a Global Unique Name as an argument to list");
+                return;
+            }
+            
+            // 2. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Listing delegations", utils::LogContext()
+                    .With("gun", listGUN)
+                    .With("trustDir", trustDir)
+                    .With("serverURL", serverURL));
+            }
+            
+            // 3. 创建仓库实例 (对应Go的notaryclient.NewFileCachedRepository)
+            // 使用transport来获取最新状态
+            Repository repo(listGUN, trustDir, serverURL);
+            
+            // 4. 获取委托角色列表 (对应Go的nRepo.GetDelegationRoles())
+            auto delegationRolesResult = repo.GetDelegationRoles();
+            if (!delegationRolesResult.ok()) {
+                utils::GetLogger().Error("Error retrieving delegation roles for repository " + listGUN + ": " + 
+                                       delegationRolesResult.error().what());
+                return;
+            }
+            
+            auto delegationRoles = delegationRolesResult.value();
+            
+            // 5. 美化打印委托角色 (对应Go的prettyPrintRoles(delegationRoles, cmd.OutOrStdout(), "delegations"))
+            prettyPrintRoles(delegationRoles, "delegations");
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error listing delegations: " + std::string(e.what()));
             return;
         }
     });
