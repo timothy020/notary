@@ -57,10 +57,10 @@ public:
                    const std::vector<std::string>& remoteRoles);
 
     // 更新TUF元数据
-    Error updateTUF(bool force = false); // TODO： 需要修改
+    Error updateTUF(bool force = false);
 
     // 引导仓库
-    Error bootstrapRepo();  // TODO： 需要修改
+    Error bootstrapRepo();
     
     // 保存元数据
     Error saveMetadata(bool ignoreSnapshot = false);
@@ -102,6 +102,45 @@ public:
     // 发布方法 (对应Go的publish方法)
     // 使用提供的changelist发布变更到远程服务器  
     Error publish(std::shared_ptr<changelist::Changelist> cl);
+
+    // 委托管理方法 (对应Go的delegations.go)
+    
+    // AddDelegation - 创建changelist条目来添加提供的委托公钥和路径 (对应Go的AddDelegation)
+    // 此方法组合了AddDelegationRoleAndKeys和AddDelegationPaths（如果调用的话，每个都会创建一个changelist）
+    Error AddDelegation(const std::string& name, 
+                       const std::vector<std::shared_ptr<crypto::PublicKey>>& delegationKeys, 
+                       const std::vector<std::string>& paths);
+
+    // AddDelegationRoleAndKeys - 创建changelist条目来添加提供的委托公钥 (对应Go的AddDelegationRoleAndKeys)
+    // 这是创建新委托的最简单方法，因为委托在创建时必须至少有一个密钥才能有效，
+    // 因为我们在验证阈值时会拒绝changelist
+    Error AddDelegationRoleAndKeys(const std::string& name, 
+                                  const std::vector<std::shared_ptr<crypto::PublicKey>>& delegationKeys);
+
+    // AddDelegationPaths - 创建changelist条目来将提供的路径添加到现有委托 (对应Go的AddDelegationPaths)
+    // 此方法本身无法创建新的委托，因为角色在创建时必须满足密钥阈值
+    Error AddDelegationPaths(const std::string& name, const std::vector<std::string>& paths);
+
+    // RemoveDelegationKeysAndPaths - 创建changelist条目来移除提供的委托密钥ID和路径 (对应Go的RemoveDelegationKeysAndPaths)
+    // 此方法组合了RemoveDelegationPaths和RemoveDelegationKeys（如果调用的话，每个都会创建一个changelist条目）
+    Error RemoveDelegationKeysAndPaths(const std::string& name, 
+                                      const std::vector<std::string>& keyIDs, 
+                                      const std::vector<std::string>& paths);
+
+    // RemoveDelegationRole - 创建changelist来移除角色的所有路径和密钥，并完全删除角色 (对应Go的RemoveDelegationRole)
+    Error RemoveDelegationRole(const std::string& name);
+
+    // RemoveDelegationPaths - 创建changelist条目来从现有委托移除提供的路径 (对应Go的RemoveDelegationPaths)
+    Error RemoveDelegationPaths(const std::string& name, const std::vector<std::string>& paths);
+
+    // RemoveDelegationKeys - 创建changelist条目来从现有委托移除提供的密钥 (对应Go的RemoveDelegationKeys)
+    // 当应用此changelist时，如果指定的密钥是角色中唯一剩余的密钥，
+    // 角色本身将被完全删除。
+    // 它还可以使用以通配符结尾的名称从父级下的所有委托中删除密钥
+    Error RemoveDelegationKeys(const std::string& name, const std::vector<std::string>& keyIDs);
+
+    // ClearDelegationPaths - 创建changelist条目来从现有委托移除所有路径 (对应Go的ClearDelegationPaths)
+    Error ClearDelegationPaths(const std::string& name);
 
 private:
 
@@ -150,6 +189,20 @@ private:
     // 为根文件创建密钥变更
     Error rootFileKeyChange(std::shared_ptr<changelist::Changelist> cl, const std::string& role, 
                            const std::string& action, const std::vector<std::shared_ptr<crypto::PublicKey>>& keyList);
+
+    // 委托管理的辅助函数 (对应Go的delegations.go中的辅助函数)
+    
+    // newUpdateDelegationChange - 创建更新委托的变更 (对应Go的newUpdateDelegationChange)
+    std::shared_ptr<changelist::TUFChange> newUpdateDelegationChange(
+        const std::string& name, const std::vector<uint8_t>& content);
+
+    // newCreateDelegationChange - 创建新建委托的变更 (对应Go的newCreateDelegationChange)
+    std::shared_ptr<changelist::TUFChange> newCreateDelegationChange(
+        const std::string& name, const std::vector<uint8_t>& content);
+
+    // newDeleteDelegationChange - 创建删除委托的变更 (对应Go的newDeleteDelegationChange)
+    std::shared_ptr<changelist::TUFChange> newDeleteDelegationChange(
+        const std::string& name, const std::vector<uint8_t>& content);
 
 
 private:

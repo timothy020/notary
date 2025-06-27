@@ -23,6 +23,7 @@ add_library(notary_lib
     main.cpp
     client/repository.cpp
     client/tufclient.cpp
+    client/delegation.cpp
     storage/httpstore.cpp
     storage/keystore.cpp
     storage/filestore.cpp

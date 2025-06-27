@@ -6,13 +6,16 @@
 #include "notary/passRetriever/passRetriever.hpp"
 #include "notary/crypto/crypto_service.hpp"
 #include "notary/utils/tools.hpp"
+#include "notary/utils/x509.hpp"
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
 #include <sys/stat.h>
 #include <openssl/ec.h>
+#include <openssl/rsa.h>
 #include <openssl/pem.h>
+#include <openssl/bio.h>
 #include <ctime>
 
 using namespace notary;
@@ -604,20 +607,20 @@ Error generateKeyToFile(const std::string& role,
 
 // 加载自定义数据
 Result<std::vector<uint8_t>> getTargetCustom(const std::string& customPath) {
-    if (customPath.empty()) {
-        return std::vector<uint8_t>();
-    }
-    
     try {
+        if (customPath.empty()) {
+            return std::vector<uint8_t>{};
+        }
+        
         // 检查文件是否存在
         if (!fs::exists(customPath)) {
-            return Error(std::string("Custom data file not found: ") + customPath);
+            return Error("Custom data file not found: " + customPath);
         }
         
         // 读取文件内容
         std::ifstream file(customPath, std::ios::binary | std::ios::ate);
         if (!file) {
-            return Error(std::string("Failed to open custom data file: ") + customPath);
+            return Error("Failed to open custom data file: " + customPath);
         }
         
         // 获取文件大小
@@ -627,12 +630,217 @@ Result<std::vector<uint8_t>> getTargetCustom(const std::string& customPath) {
         // 读取文件内容
         std::vector<uint8_t> customData(size);
         if (!file.read(reinterpret_cast<char*>(customData.data()), size)) {
-            return Error(std::string("Failed to read custom data file: ") + customPath);
+            return Error("Failed to read custom data file: " + customPath);
         }
         
         return customData;
+        
     } catch (const std::exception& e) {
         return Error(std::string("Failed to load custom data: ") + e.what());
+    }
+}
+
+// ingestPublicKeys函数实现 - 对应Go版本的ingestPublicKeys函数
+// 读取PEM格式的公钥文件并解析为PublicKey对象
+Result<std::vector<std::shared_ptr<crypto::PublicKey>>> ingestPublicKeys(const std::vector<std::string>& pubKeyPaths) {
+    try {
+        std::vector<std::shared_ptr<crypto::PublicKey>> pubKeys;
+        pubKeys.reserve(pubKeyPaths.size());
+        
+        // 遍历每个公钥文件路径
+        for (const auto& pubKeyPath : pubKeyPaths) {
+            // 检查文件是否存在
+            if (!fs::exists(pubKeyPath)) {
+                return Error("File for public key does not exist: " + pubKeyPath);
+            }
+            
+            utils::GetLogger().Info("Processing public key file: " + pubKeyPath);
+            
+            // 读取公钥文件内容
+            std::ifstream file(pubKeyPath);
+            if (!file.is_open()) {
+                return Error("Unable to read public key from file: " + pubKeyPath);
+            }
+            
+            // 读取文件内容到字符串
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            std::string pemStr = buffer.str();
+            
+            // 查找PEM块的开始和结束
+            size_t beginPos = pemStr.find("-----BEGIN");
+            size_t endPos = pemStr.find("-----END");
+            if (beginPos == std::string::npos || endPos == std::string::npos) {
+                return Error("Invalid PEM format in file: " + pubKeyPath);
+            }
+            
+            // 提取PEM块内容
+            std::string pemBlock = pemStr.substr(beginPos, endPos + 25 - beginPos);
+            
+            // 提取role信息（如果存在）
+            std::string role;
+            size_t rolePos = pemBlock.find("role:");
+            if (rolePos != std::string::npos) {
+                size_t roleStart = rolePos + 5; // "role:"的长度
+                size_t roleEnd = pemBlock.find_first_of("\r\n", roleStart);
+                if (roleEnd != std::string::npos) {
+                    role = pemBlock.substr(roleStart, roleEnd - roleStart);
+                    // 去除前后空格
+                    role.erase(0, role.find_first_not_of(" \t"));
+                    role.erase(role.find_last_not_of(" \t") + 1);
+                    utils::GetLogger().Info("Found role information", 
+                        utils::LogContext().With("role", role));
+                }
+            }
+            
+            // 移除role信息行，保留PEM头部和Base64编码部分
+            std::string cleanPem;
+            std::istringstream pemStream(pemBlock);
+            std::string line;
+            bool foundBegin = false;
+            bool isBase64Section = false;
+            
+            while (std::getline(pemStream, line)) {
+                // 去除行尾的\r
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                
+                if (line.find("-----BEGIN") != std::string::npos) {
+                    foundBegin = true;
+                    isBase64Section = true;
+                    cleanPem += line + "\n";
+                } else if (line.find("-----END") != std::string::npos) {
+                    isBase64Section = false;
+                    cleanPem += line + "\n";
+                } else if (foundBegin && isBase64Section) {
+                    // 跳过role行和空行
+                    if (line.find("role:") == std::string::npos && !line.empty()) {
+                        cleanPem += line + "\n";
+                    }
+                }
+            }
+            
+            // 将处理后的PEM数据转换为字节数组
+            std::vector<uint8_t> cleanPubKeyBytes(cleanPem.begin(), cleanPem.end());
+            
+            // 解析PEM格式公钥或证书
+            try {
+                std::shared_ptr<crypto::PublicKey> pubKey = nullptr;
+                
+                // 先尝试作为证书解析
+                try {
+                    auto certs = utils::LoadCertBundleFromPEM(cleanPubKeyBytes);
+                    if (!certs.empty()) {
+                        pubKey = utils::CertToKey(*certs[0]);
+                        if (pubKey) {
+                            utils::GetLogger().Info("Successfully loaded public key from certificate", 
+                                utils::LogContext()
+                                    .With("file", pubKeyPath)
+                                    .With("keyID", pubKey->ID())
+                                    .With("algorithm", pubKey->Algorithm())
+                                    .With("role", role));
+                        }
+                    }
+                } catch (const std::exception& certErr) {
+                    utils::GetLogger().Debug("Certificate parsing failed, trying public key format", 
+                        utils::LogContext()
+                            .With("file", pubKeyPath)
+                            .With("certError", certErr.what()));
+                }
+                
+                // 如果证书解析失败，尝试直接解析公钥
+                if (!pubKey) {
+                    try {
+                        BIO* bio = BIO_new_mem_buf(cleanPubKeyBytes.data(), static_cast<int>(cleanPubKeyBytes.size()));
+                        if (!bio) {
+                            return Error("Failed to create BIO for PEM data in file: " + pubKeyPath);
+                        }
+                        
+                        EVP_PKEY* evpKey = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+                        BIO_free(bio);
+                        
+                        if (evpKey) {
+                            if (EVP_PKEY_id(evpKey) == EVP_PKEY_EC) {
+                                unsigned char* der = nullptr;
+                                int derLen = i2d_PUBKEY(evpKey, &der);
+                                if (derLen > 0 && der) {
+                                    std::vector<uint8_t> keyDer(der, der + derLen);
+                                    OPENSSL_free(der);
+                                    pubKey = crypto::NewPublicKey(ECDSA_KEY, keyDer);
+                                }
+                            } else if (EVP_PKEY_id(evpKey) == EVP_PKEY_RSA) {
+                                unsigned char* der = nullptr;
+                                int derLen = i2d_PUBKEY(evpKey, &der);
+                                if (derLen > 0 && der) {
+                                    std::vector<uint8_t> keyDer(der, der + derLen);
+                                    OPENSSL_free(der);
+                                    pubKey = crypto::NewPublicKey(RSA_KEY, keyDer);
+                                }
+                            }
+                            EVP_PKEY_free(evpKey);
+                            
+                            if (pubKey) {
+                                utils::GetLogger().Info("Successfully loaded public key from PEM", 
+                                    utils::LogContext()
+                                        .With("file", pubKeyPath)
+                                        .With("keyID", pubKey->ID())
+                                        .With("algorithm", pubKey->Algorithm())
+                                        .With("role", role));
+                            }
+                        }
+                    } catch (const std::exception& keyErr) {
+                        utils::GetLogger().Debug("Public key parsing also failed", 
+                            utils::LogContext()
+                                .With("file", pubKeyPath)
+                                .With("keyError", keyErr.what()));
+                    }
+                }
+                
+                if (!pubKey) {
+                    return Error("Unable to parse PEM file as either certificate or public key: " + pubKeyPath);
+                }
+                
+                pubKeys.push_back(pubKey);
+                
+            } catch (const std::exception& e) {
+                return Error("Unable to parse valid public key certificate from PEM file " + 
+                           pubKeyPath + ": " + e.what());
+            }
+        }
+        
+        // 如果提供了文件路径但没有成功解析任何密钥，返回错误
+        if (pubKeys.empty() && !pubKeyPaths.empty()) {
+            return Error("No valid public keys found in the provided certificate files.");
+        }
+        
+        utils::GetLogger().Info("Successfully ingested public keys", 
+            utils::LogContext()
+                .With("keyCount", std::to_string(pubKeys.size())));
+        
+        return pubKeys;
+        
+    } catch (const std::exception& e) {
+        return Error(std::string("Failed to ingest public keys: ") + e.what());
+    }
+}
+
+// checkAllPaths函数实现 - 对应Go版本的checkAllPaths函数
+// 检查路径列表中是否包含空字符串，如果有则表示要添加所有路径
+void checkAllPaths(std::vector<std::string>& paths, bool& allPaths) {
+    // 检查是否有空路径 (对应Go的if path == "")
+    for (const auto& path : paths) {
+        if (path.empty()) {
+            allPaths = true;
+            break;
+        }
+    }
+    
+    // 如果用户传递了--all-paths（或在--paths中给出了""路径），给出""路径
+    // (对应Go的if d.allPaths { d.paths = []string{""} })
+    if (allPaths) {
+        paths.clear();
+        paths.push_back("");
     }
 }
 
@@ -1202,6 +1410,25 @@ int main(int argc, char** argv) {
         }
     });
     
+    // ======================== delegation 命令组 ========================
+    auto delegation = app.add_subcommand("delegation", "Manage delegations");
+    auto delegationAdd = delegation->add_subcommand("add", "Add a delegation role with public keys and paths");
+    
+    // delegation add 参数定义 - 对应Go版本的delegationAdd函数参数
+    std::string delegationGUN;
+    std::string delegationRole;
+    std::vector<std::string> delegationPubKeyPaths;
+    std::vector<std::string> delegationPaths;
+    bool delegationAllPaths = false;
+    bool delegationAutoPublish = false;
+    
+    delegationAdd->add_option("gun", delegationGUN, "Globally Unique Name")->required();
+    delegationAdd->add_option("role", delegationRole, "Delegation role name")->required();
+    delegationAdd->add_option("pubkey_file", delegationPubKeyPaths, "Path to public key certificate file(s)")->expected(-1);
+    delegationAdd->add_option("--paths", delegationPaths, "List of paths to add to this delegation");
+    delegationAdd->add_flag("--all-paths", delegationAllPaths, "Add all paths to this delegation");
+    delegationAdd->add_flag("-p,--publish", delegationAutoPublish, "Auto publish after adding delegation");
+
     // ======================== key 命令组 ========================
     auto key = app.add_subcommand("key", "Manage signing keys");
     auto keysList = key->add_subcommand("list", "List all signing keys");
@@ -1482,6 +1709,122 @@ int main(int argc, char** argv) {
         }
     });
     
+    // delegation add 命令实现 - 对应Go版本的delegationAdd函数
+    delegationAdd->callback([&]() {
+        try {
+            // 1. 验证参数 - 必须至少有GUN和角色名，以及至少一个密钥或路径（或--all-paths标志）
+            // (对应Go的if len(args) < 2 || len(args) < 3 && d.paths == nil && !d.allPaths)
+            if (delegationGUN.empty() || delegationRole.empty()) {
+                utils::GetLogger().Error("Must specify the Global Unique Name and the role of the delegation");
+                return;
+            }
+            
+            if (delegationPubKeyPaths.empty() && delegationPaths.empty() && !delegationAllPaths) {
+                utils::GetLogger().Error("Must specify public key certificate paths and/or a list of paths to add");
+                return;
+            }
+            
+            // 2. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Adding delegation", utils::LogContext()
+                    .With("gun", delegationGUN)
+                    .With("role", delegationRole)
+                    .With("pubKeyCount", std::to_string(delegationPubKeyPaths.size()))
+                    .With("pathCount", std::to_string(delegationPaths.size()))
+                    .With("allPaths", delegationAllPaths ? "true" : "false"));
+            }
+            
+            // 3. 验证角色名称是否是有效的委托名称 (对应Go的data.IsDelegation(role))
+            // 委托角色名称通常包含"/"分隔符，且不是基础角色
+            if (delegationRole == ROOT_ROLE || delegationRole == TARGETS_ROLE || 
+                delegationRole == SNAPSHOT_ROLE || delegationRole == TIMESTAMP_ROLE) {
+                utils::GetLogger().Error("Invalid delegation name: " + delegationRole + " - cannot use base role names");
+                return;
+            }
+            
+            if (delegationRole.find('/') == std::string::npos) {
+                utils::GetLogger().Error("Invalid delegation name: " + delegationRole + " - delegation names should contain '/'");
+                return;
+            }
+            
+            // 4. 读取公钥文件 (对应Go的ingestPublicKeys(args))
+            std::vector<std::shared_ptr<crypto::PublicKey>> pubKeys;
+            if (!delegationPubKeyPaths.empty()) {
+                auto pubKeysResult = ingestPublicKeys(delegationPubKeyPaths);
+                if (!pubKeysResult.ok()) {
+                    utils::GetLogger().Error("Error reading public keys: " + pubKeysResult.error().what());
+                    return;
+                }
+                pubKeys = pubKeysResult.value();
+            }
+            
+            // 5. 处理路径选项 (对应Go的checkAllPaths(d))
+            auto paths = delegationPaths;
+            checkAllPaths(paths, delegationAllPaths);
+            
+            // 6. 创建仓库实例 (对应Go的notaryclient.NewFileCachedRepository)
+            // 不执行在线操作，因此transport参数应为nil
+            Repository repo(delegationGUN, trustDir, serverURL);
+            
+            // 7. 添加委托到仓库 (对应Go的nRepo.AddDelegation(role, pubKeys, d.paths))
+            auto addErr = repo.AddDelegation(delegationRole, pubKeys, paths);
+            if (addErr.hasError()) {
+                utils::GetLogger().Error("Failed to create delegation: " + addErr.what());
+                return;
+            }
+            
+            // 8. 生成密钥ID列表用于更好的CLI打印 (对应Go的pubKeyID, err := utils.CanonicalKeyID(pubKey))
+            std::vector<std::string> pubKeyIDs;
+            for (const auto& pubKey : pubKeys) {
+                pubKeyIDs.push_back(pubKey->ID());
+            }
+            
+            // 9. 输出成功信息 (对应Go的cmd.Printf("Addition of delegation role..."))
+            std::cout << std::endl;
+            
+            std::string addingItems = "";
+            if (!pubKeyIDs.empty()) {
+                addingItems += "with keys [";
+                for (size_t i = 0; i < pubKeyIDs.size(); ++i) {
+                    if (i > 0) addingItems += ", ";
+                    addingItems += pubKeyIDs[i];
+                }
+                addingItems += "], ";
+            }
+            
+            if (!paths.empty() || delegationAllPaths) {
+                addingItems += "with paths [";
+                for (size_t i = 0; i < paths.size(); ++i) {
+                    if (i > 0) addingItems += ", ";
+                    addingItems += paths[i];
+                }
+                addingItems += "], ";
+            }
+            
+            std::cout << "Addition of delegation role " << delegationRole << " " 
+                     << addingItems << "to repository \"" << delegationGUN 
+                     << "\" staged for next publish." << std::endl;
+            std::cout << std::endl;
+            
+            // 10. 可能自动发布 (对应Go的maybeAutoPublish)
+            auto pubErr = maybeAutoPublish(delegationAutoPublish, delegationGUN, serverURL, repo);
+            if (!pubErr.ok()) {
+                utils::GetLogger().Error("Error publishing changes: " + pubErr.what());
+                return;
+            }
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error adding delegation: " + std::string(e.what()));
+            return;
+        }
+    });
+
     // key rotate 命令实现 - 对应Go版本的keysRotate函数
     keyRotate->callback([&]() {
         try {
