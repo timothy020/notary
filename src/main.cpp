@@ -1478,6 +1478,7 @@ int main(int argc, char** argv) {
     auto delegationAdd = delegation->add_subcommand("add", "Add a delegation role with public keys and paths");
     auto delegationRemove = delegation->add_subcommand("remove", "Remove delegation keys or paths");
     auto delegationList = delegation->add_subcommand("list", "List delegations for the Global Unique Name");
+    auto delegationPurge = delegation->add_subcommand("purge", "Remove KeyID(s) from all delegation roles in the given GUN");
     
     // delegation add 参数定义 - 对应Go版本的delegationAdd函数参数
     std::string delegationGUN;
@@ -1517,6 +1518,15 @@ int main(int argc, char** argv) {
     std::string listGUN;
     
     delegationList->add_option("gun", listGUN, "Globally Unique Name")->required();
+    
+    // delegation purge 参数定义 - 对应Go版本的delegationPurgeKeys函数参数
+    std::string purgeGUN;
+    std::vector<std::string> purgeKeyIDs;
+    bool purgeAutoPublish = false;
+    
+    delegationPurge->add_option("gun", purgeGUN, "Globally Unique Name")->required();
+    delegationPurge->add_option("--key", purgeKeyIDs, "Delegation key IDs to be removed from the GUN")->expected(-1);
+    delegationPurge->add_flag("-p,--publish", purgeAutoPublish, "Auto publish after purging keys");
 
     // ======================== key 命令组 ========================
     auto key = app.add_subcommand("key", "Manage signing keys");
@@ -1525,6 +1535,7 @@ int main(int argc, char** argv) {
     auto keyRemove = key->add_subcommand("remove", "Remove a signing key");
     auto keyPasswd = key->add_subcommand("passwd", "Change the passphrase for a signing key");
     auto keyRotate = key->add_subcommand("rotate", "Rotate a key for a repository and role");
+    auto keyInspect = key->add_subcommand("inspect", "Inspect a public key and show its key ID");
     
     // key generate 参数定义 - 对应Go版本的keysGenerate函数参数
     std::string generateAlgorithm = "ecdsa";  // 默认算法
@@ -1545,6 +1556,11 @@ int main(int argc, char** argv) {
     keyRotate->add_option("role", rotateRole, "Role to rotate key for (root, targets, snapshot, timestamp)")->required();
     keyRotate->add_flag("--server-managed", serverManaged, "Use server-managed key rotation");
     keyRotate->add_option("--key-file", keyFiles, "Key file(s) to import for rotation (can be used multiple times)");
+    
+    // key inspect 参数定义
+    std::string inspectKeyFile;
+    
+    keyInspect->add_option("key_file", inspectKeyFile, "Path to the public key file to inspect")->required();
     
     keyGenerate->callback([&]() {
         try {
@@ -2107,6 +2123,69 @@ int main(int argc, char** argv) {
             return;
         }
     });
+    
+    // delegation purge 命令实现 - 对应Go版本的delegationPurgeKeys函数
+    delegationPurge->callback([&]() {
+        try {
+            // 1. 验证参数 - 需要提供GUN (对应Go的len(args) != 1检查)
+            if (purgeGUN.empty()) {
+                utils::GetLogger().Error("Please provide a single Global Unique Name as an argument to remove");
+                return;
+            }
+            
+            // 2. 验证至少提供一个密钥ID (对应Go的len(d.keyIDs) == 0检查)
+            if (purgeKeyIDs.empty()) {
+                utils::GetLogger().Error("Please provide at least one key ID to be removed using the --key flag");
+                return;
+            }
+            
+            // 3. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Purging delegation keys", utils::LogContext()
+                    .With("gun", purgeGUN)
+                    .With("keyIDs", utils::vectorToString(purgeKeyIDs))
+                    .With("trustDir", trustDir)
+                    .With("serverURL", serverURL));
+            }
+            
+            // 4. 创建仓库实例 (对应Go的notaryclient.NewFileCachedRepository)
+            Repository repo(purgeGUN, trustDir, serverURL);
+            
+            // 5. 从所有委托中移除密钥 (对应Go的nRepo.RemoveDelegationKeys("targets/*", d.keyIDs))
+            // 使用通配符"targets/*"表示从所有委托角色中移除
+            auto removeErr = repo.RemoveDelegationKeys("targets/*", purgeKeyIDs);
+            if (!removeErr.ok()) {
+                utils::GetLogger().Error("Failed to remove keys from delegations: " + removeErr.what());
+                return;
+            }
+            
+            // 6. 输出成功信息 (对应Go的fmt.Printf)
+            std::cout << std::endl;
+            std::cout << "Removal of the following keys from all delegations in " << purgeGUN 
+                     << " staged for next publish:" << std::endl;
+            for (const auto& keyID : purgeKeyIDs) {
+                std::cout << "\t- " << keyID << std::endl;
+            }
+            std::cout << std::endl;
+            
+            // 7. 可能自动发布 (对应Go的maybeAutoPublish)
+            auto pubErr = maybeAutoPublish(purgeAutoPublish, purgeGUN, serverURL, repo);
+            if (!pubErr.ok()) {
+                utils::GetLogger().Error("Error publishing changes: " + pubErr.what());
+                return;
+            }
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error purging delegation keys: " + std::string(e.what()));
+            return;
+        }
+    });
 
     // key rotate 命令实现 - 对应Go版本的keysRotate函数
     keyRotate->callback([&]() {
@@ -2196,6 +2275,47 @@ int main(int argc, char** argv) {
             
         } catch (const std::exception& e) {
             utils::GetLogger().Error("Error during key rotation: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+    // key inspect 命令实现
+    keyInspect->callback([&]() {
+        try {
+            // 1. 验证文件是否存在
+            if (!fs::exists(inspectKeyFile)) {
+                utils::GetLogger().Error("Public key file not found: " + inspectKeyFile);
+                return;
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Inspecting public key file: " + inspectKeyFile);
+            }
+            
+            // 2. 读取并解析公钥文件
+            auto pubKeysResult = ingestPublicKeys({inspectKeyFile});
+            if (!pubKeysResult.ok()) {
+                utils::GetLogger().Error("Error reading public key: " + pubKeysResult.error().what());
+                return;
+            }
+            
+            auto pubKeys = pubKeysResult.value();
+            if (pubKeys.empty()) {
+                utils::GetLogger().Error("No valid public key found in file: " + inspectKeyFile);
+                return;
+            }
+            
+            // 3. 显示密钥信息
+            for (const auto& pubKey : pubKeys) {
+                std::cout << std::endl;
+                std::cout << "Key file: " << inspectKeyFile << std::endl;
+                std::cout << "Key ID: " << pubKey->ID() << std::endl;
+                std::cout << "Algorithm: " << pubKey->Algorithm() << std::endl;
+                std::cout << std::endl;
+            }
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error inspecting key: " + std::string(e.what()));
             return;
         }
     });
