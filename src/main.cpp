@@ -1413,6 +1413,7 @@ int main(int argc, char** argv) {
     // ======================== delegation 命令组 ========================
     auto delegation = app.add_subcommand("delegation", "Manage delegations");
     auto delegationAdd = delegation->add_subcommand("add", "Add a delegation role with public keys and paths");
+    auto delegationRemove = delegation->add_subcommand("remove", "Remove delegation keys or paths");
     
     // delegation add 参数定义 - 对应Go版本的delegationAdd函数参数
     std::string delegationGUN;
@@ -1428,6 +1429,25 @@ int main(int argc, char** argv) {
     delegationAdd->add_option("--paths", delegationPaths, "List of paths to add to this delegation");
     delegationAdd->add_flag("--all-paths", delegationAllPaths, "Add all paths to this delegation");
     delegationAdd->add_flag("-p,--publish", delegationAutoPublish, "Auto publish after adding delegation");
+    
+    // delegation remove 参数定义 - 对应Go版本的delegationRemove函数参数
+    std::string removeGUN;
+    std::string removeRole;
+    std::vector<std::string> removeKeyIDs;
+    std::vector<std::string> removePaths;
+    bool removeAllPaths = false;
+    bool removeAll = false;
+    bool forceYes = false;
+    bool removeAutoPublish = false;
+    
+    delegationRemove->add_option("gun", removeGUN, "Globally Unique Name")->required();
+    delegationRemove->add_option("role", removeRole, "Delegation role name")->required();
+    delegationRemove->add_option("key_id", removeKeyIDs, "Key IDs to remove from delegation")->expected(-1);
+    delegationRemove->add_option("--paths", removePaths, "List of paths to remove from delegation");
+    delegationRemove->add_flag("--all-paths", removeAllPaths, "Remove all paths from this delegation");
+    delegationRemove->add_flag("--all", removeAll, "Remove entire delegation");
+    delegationRemove->add_flag("-y,--yes", forceYes, "Answer yes to the removal question (no confirmation)");
+    delegationRemove->add_flag("-p,--publish", removeAutoPublish, "Auto publish after removing delegation");
 
     // ======================== key 命令组 ========================
     auto key = app.add_subcommand("key", "Manage signing keys");
@@ -1821,6 +1841,154 @@ int main(int argc, char** argv) {
             
         } catch (const std::exception& e) {
             utils::GetLogger().Error("Error adding delegation: " + std::string(e.what()));
+            return;
+        }
+    });
+    
+    // delegation remove 命令实现 - 对应Go版本的delegationRemove函数
+    delegationRemove->callback([&]() {
+        try {
+            // 1. 验证参数 - 至少需要GUN和角色名 (对应Go的len(args) < 2检查)
+            if (removeGUN.empty() || removeRole.empty()) {
+                utils::GetLogger().Error("Must specify the Global Unique Name and the role of the delegation along with optional keyIDs and/or a list of paths to remove");
+                return;
+            }
+            
+            // 2. 验证角色名称是否是有效的委托名称 (对应Go的data.IsDelegation(role))
+            if (removeRole == ROOT_ROLE || removeRole == TARGETS_ROLE || 
+                removeRole == SNAPSHOT_ROLE || removeRole == TIMESTAMP_ROLE) {
+                utils::GetLogger().Error("Invalid delegation name: " + removeRole + " - cannot use base role names");
+                return;
+            }
+            
+            if (removeRole.find('/') == std::string::npos) {
+                utils::GetLogger().Error("Invalid delegation name: " + removeRole + " - delegation names should contain '/'");
+                return;
+            }
+            
+            // 3. 加载配置
+            auto configErr = loadConfig(configFile, trustDir, serverURL);
+            if (!configErr.ok()) {
+                utils::GetLogger().Error("Error loading configuration: " + configErr.what());
+                return;
+            }
+            
+            // 4. 检查参数逻辑 - 如果没有指定密钥ID和路径，且没有--all-paths，则表示要删除整个委托
+            // (对应Go的if len(args) == 2 && d.paths == nil && !d.allPaths)
+            if (removeKeyIDs.empty() && removePaths.empty() && !removeAllPaths) {
+                removeAll = true;
+            }
+            
+            // 5. 如果用户传递了--all-paths，不使用任何传入的--paths
+            // (对应Go的if d.allPaths { d.paths = nil })
+            if (removeAllPaths) {
+                removePaths.clear();
+            }
+            
+            if (debug) {
+                utils::GetLogger().Info("Removing delegation", utils::LogContext()
+                    .With("gun", removeGUN)
+                    .With("role", removeRole)
+                    .With("keyIDCount", std::to_string(removeKeyIDs.size()))
+                    .With("pathCount", std::to_string(removePaths.size()))
+                    .With("allPaths", removeAllPaths ? "true" : "false")
+                    .With("removeAll", removeAll ? "true" : "false"));
+            }
+            
+            // 6. 创建仓库实例 (对应Go的notaryclient.NewFileCachedRepository)
+            Repository repo(removeGUN, trustDir, serverURL);
+            
+            Error removeErr;
+            
+            // 7. 根据不同的删除类型执行相应操作
+            if (removeAll) {
+                // 删除整个委托 (对应Go的nRepo.RemoveDelegationRole(role))
+                
+                // 请求确认 (对应Go的askConfirm逻辑)
+                std::cout << "\nAre you sure you want to remove all data for this delegation? (yes/no)" << std::endl;
+                if (!forceYes) {
+                    if (!askConfirm(std::cin)) {
+                        std::cout << "Aborting action." << std::endl;
+                        return;
+                    }
+                } else {
+                    std::cout << "Confirmed `yes` from flag" << std::endl;
+                }
+                
+                // 删除整个委托
+                removeErr = repo.RemoveDelegationRole(removeRole);
+                if (!removeErr.ok()) {
+                    utils::GetLogger().Error("Failed to remove delegation: " + removeErr.what());
+                    return;
+                }
+                
+            } else {
+                // 部分删除 - 清除路径或移除密钥/路径
+                if (removeAllPaths) {
+                    // 清除所有路径 (对应Go的nRepo.ClearDelegationPaths(role))
+                    removeErr = repo.ClearDelegationPaths(removeRole);
+                    if (!removeErr.ok()) {
+                        utils::GetLogger().Error("Failed to clear delegation paths: " + removeErr.what());
+                        return;
+                    }
+                }
+                
+                // 移除任何传入的密钥或路径 (对应Go的nRepo.RemoveDelegationKeysAndPaths)
+                if (!removeKeyIDs.empty() || !removePaths.empty()) {
+                    removeErr = repo.RemoveDelegationKeysAndPaths(removeRole, removeKeyIDs, removePaths);
+                    if (!removeErr.ok()) {
+                        utils::GetLogger().Error("Failed to remove delegation keys and paths: " + removeErr.what());
+                        return;
+                    }
+                }
+            }
+            
+            // 8. 输出结果信息 (对应Go的delegationRemoveOutput)
+            std::cout << std::endl;
+            if (removeAll) {
+                std::cout << "Forced removal (including all keys and paths) of delegation role " 
+                         << removeRole << " to repository \"" << removeGUN 
+                         << "\" staged for next publish." << std::endl;
+            } else {
+                std::string removingItems = "";
+                
+                if (!removeKeyIDs.empty()) {
+                    removingItems += "with keys [";
+                    for (size_t i = 0; i < removeKeyIDs.size(); ++i) {
+                        if (i > 0) removingItems += ", ";
+                        removingItems += removeKeyIDs[i];
+                    }
+                    removingItems += "], ";
+                }
+                
+                if (removeAllPaths) {
+                    removingItems += "with all paths, ";
+                }
+                
+                if (!removePaths.empty()) {
+                    removingItems += "with paths [";
+                    for (size_t i = 0; i < removePaths.size(); ++i) {
+                        if (i > 0) removingItems += ", ";
+                        removingItems += removePaths[i];
+                    }
+                    removingItems += "], ";
+                }
+                
+                std::cout << "Removal of delegation role " << removeRole << " " 
+                         << removingItems << "to repository \"" << removeGUN 
+                         << "\" staged for next publish." << std::endl;
+            }
+            std::cout << std::endl;
+            
+            // 9. 可能自动发布 (对应Go的maybeAutoPublish)
+            auto pubErr = maybeAutoPublish(removeAutoPublish, removeGUN, serverURL, repo);
+            if (!pubErr.ok()) {
+                utils::GetLogger().Error("Error publishing changes: " + pubErr.what());
+                return;
+            }
+            
+        } catch (const std::exception& e) {
+            utils::GetLogger().Error("Error removing delegation: " + std::string(e.what()));
             return;
         }
     });
